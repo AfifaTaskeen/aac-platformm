@@ -1,0 +1,10 @@
+/* ==========================================================================
+   App shell
+   Styles that belong to App.jsx itself. Screen-specific styles live next to
+   their own component:
+     src/components/SplashScreen.css
+     src/components/AccountScreen/AccountScreen.css
+   ========================================================================== */
+
+/* Nothing needed here yet -- App currently only chooses which screen to show,
+   and each screen paints its own full-height background. */

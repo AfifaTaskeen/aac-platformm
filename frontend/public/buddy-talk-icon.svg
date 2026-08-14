@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Buddy Talk app icon. Simplified version of the logo: at favicon size the
+       second bubble becomes noise, so only the face remains. -->
+  <rect width="128" height="128" rx="28" fill="#FFF7EC"/>
+  <path d="M40 18 H88 A28 28 0 0 1 116 46 V70 A28 28 0 0 1 88 98 H72 L48 120 L54 98 H40 A28 28 0 0 1 12 70 V46 A28 28 0 0 1 40 18 Z"
+        fill="#FF6F5E" stroke="#2B2B3A" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="50" cy="54" r="6" fill="#2B2B3A"/>
+  <circle cx="78" cy="54" r="6" fill="#2B2B3A"/>
+  <path d="M48 74 Q64 88 80 74" fill="none" stroke="#2B2B3A" stroke-width="6" stroke-linecap="round"/>
+</svg>

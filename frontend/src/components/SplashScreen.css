@@ -1,0 +1,274 @@
+/* ==========================================================================
+   SplashScreen
+   ==========================================================================
+
+   SIZING STRATEGY -- read this first, it explains most of the file.
+
+   The app is TABLET-FIRST, so sizes are written with clamp() and the `vmin`
+   unit instead of fixed pixels or phone-first breakpoints:
+
+       clamp(smallest, preferred, largest)
+
+   `vmin` is 1% of whichever viewport side is SHORTER. That is the key trick
+   here: a tablet is 768px on its short side whether it is held in portrait
+   OR landscape, so the composition keeps exactly the same visual weight when
+   the tablet is rotated. No separate landscape layout is needed.
+
+       tablet portrait   768 x 1024  ->  vmin = 768
+       tablet landscape  1024 x 768  ->  vmin = 768   (identical)
+       laptop            1440 x 900  ->  vmin = 900   (a little bigger, capped)
+
+   The `largest` value in each clamp() is what stops the logo and text from
+   ballooning on a big desktop monitor.
+
+   Only ONE media query is used for layout, and it handles genuinely short
+   screens (a laptop browser window is often only ~650px tall), where the
+   composition has to tighten up or the illustration would be cut off.
+   ========================================================================== */
+
+.splash {
+  /* Fill the screen. 100dvh ("dynamic viewport height") is the modern unit
+     that accounts for browser toolbars sliding in and out on tablets. */
+  min-height: 100dvh;
+  width: 100%;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  background-color: var(--color-cream);
+  position: relative;
+  overflow: hidden;
+
+  /* Keeps content clear of rounded screen corners and camera notches. */
+  padding: max(24px, env(safe-area-inset-top)) 24px 0;
+  box-sizing: border-box;
+}
+
+/* The whole screen fades out when App.jsx flips `isLeaving` to true. */
+.splash--leaving {
+  opacity: 0;
+  transition: opacity 400ms ease-out;
+}
+
+/* --------------------------------------------------------------------------
+   Warm glow behind the logo
+   A very soft lightening of the background, roughly a 6% shift. It is not
+   really visible as a gradient -- it just makes the logo feel like the
+   centre of the screen.
+   -------------------------------------------------------------------------- */
+.splash__glow {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  width: min(140vmin, 900px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+
+  background: radial-gradient(
+    circle,
+    var(--color-cream-warm) 0%,
+    rgba(255, 239, 217, 0.55) 45%,
+    rgba(255, 239, 217, 0) 72%
+  );
+
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   The focal block: logo + name + tagline, grouped tightly together
+   -------------------------------------------------------------------------- */
+.splash__stage {
+  position: relative;   /* lifts it above the glow */
+  z-index: 1;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(12px, 2.2vmin, 24px);
+
+  /* Stops the block from spreading out on a wide desktop screen. */
+  max-width: 640px;
+  width: 100%;
+  text-align: center;
+
+  /* Pushes the group slightly above true centre. Perfectly centred
+     compositions read as sagging; a small lift looks balanced. */
+  margin-top: auto;
+  margin-bottom: clamp(16px, 4vmin, 48px);
+}
+
+.splash__logo {
+  width: clamp(132px, 26vmin, 240px);
+  height: auto;
+  display: block;
+}
+
+.splash__name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(2.4rem, 9vmin, 5rem);
+  line-height: 1.05;
+  letter-spacing: 0.005em;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.splash__tagline {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: clamp(1.15rem, 3.2vmin, 1.9rem);
+  line-height: 1.4;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Illustration, anchored to the bottom of the screen
+   -------------------------------------------------------------------------- */
+.splash__illustration {
+  position: relative;
+  z-index: 1;
+
+  width: 100%;
+  /* Capped so the drawing never stretches wide and thin on a desktop. */
+  max-width: min(100%, 880px);
+  height: auto;
+
+  margin-top: auto;
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   Short screens (laptop browser windows, tablet landscape with toolbars)
+   Everything tightens so the illustration is never clipped.
+   -------------------------------------------------------------------------- */
+@media (max-height: 700px) {
+  .splash__logo {
+    width: clamp(96px, 17vmin, 150px);
+  }
+  .splash__name {
+    font-size: clamp(1.9rem, 6vmin, 3rem);
+  }
+  .splash__tagline {
+    font-size: clamp(1rem, 2.4vmin, 1.3rem);
+  }
+  .splash__illustration {
+    max-width: min(100%, 720px);
+  }
+  .splash__stage {
+    gap: clamp(8px, 1.4vmin, 14px);
+    margin-bottom: clamp(10px, 2vmin, 24px);
+  }
+}
+
+/* ==========================================================================
+   ANIMATION
+
+   One calm assembly, then stillness.
+
+   Every element's NORMAL state is its final, fully visible state. The
+   animations only run to bring it there from a hidden start, using
+   `backwards` fill so it stays hidden during its delay. That ordering is
+   deliberate: if animations are switched off (see the reduced-motion block
+   at the bottom), everything is simply already visible. Nothing disappears.
+   ========================================================================== */
+
+@keyframes splash-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.93);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes splash-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes splash-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A very slow up-and-down drift, about 4px. It is the only thing that keeps
+   moving once the screen has settled, and it makes the screen feel alive
+   without asking for attention. */
+@keyframes splash-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+.splash__glow {
+  animation: splash-fade-in 500ms ease-out backwards;
+}
+.splash__logo {
+  animation: splash-pop-in 420ms cubic-bezier(0.2, 0.7, 0.3, 1) backwards;
+}
+.splash__name {
+  animation: splash-rise-in 400ms ease-out 300ms backwards;
+}
+.splash__tagline {
+  animation: splash-rise-in 400ms ease-out 580ms backwards;
+}
+.splash__illustration {
+  animation: splash-rise-in 500ms ease-out 860ms backwards;
+}
+
+/* the small teal bubble inside the logo */
+.logo__bubble-small {
+  animation: splash-breathe 3400ms ease-in-out 1500ms infinite;
+}
+
+/* --------------------------------------------------------------------------
+   Reduced motion
+
+   If the child, parent or therapist has asked their device to reduce motion,
+   all of the above is switched off. The screen simply appears with one short
+   fade. The repeating drift is removed completely -- a looping animation is
+   exactly what motion-sensitive users need to not have.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .splash__glow,
+  .splash__logo,
+  .splash__name,
+  .splash__tagline,
+  .splash__illustration,
+  .logo__bubble-small {
+    animation: none;
+  }
+
+  .splash {
+    animation: splash-fade-in 200ms ease-out backwards;
+  }
+
+  .splash--leaving {
+    transition-duration: 200ms;
+  }
+}

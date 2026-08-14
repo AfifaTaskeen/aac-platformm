@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/buddy-talk-icon.svg" />
+    <!-- viewport-fit=cover lets the layout reach under rounded tablet corners,
+         which src/components/SplashScreen.css then pads back with env(safe-area-inset-*) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Tints the browser/OS chrome to match the splash background -->
+    <meta name="theme-color" content="#FFF7EC" />
+    <meta name="description" content="Buddy Talk - a communication app for children." />
+    <title>Buddy Talk</title>
+  </head>
+  <!-- Painted cream immediately so there is no white flash before React mounts -->
+  <body style="background-color: #fff7ec">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

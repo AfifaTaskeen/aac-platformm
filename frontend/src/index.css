@@ -1,0 +1,127 @@
+/* ==========================================================================
+   Buddy Talk -- global foundations
+   Fonts, colour tokens and a small reset. Everything else builds on this.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Fonts
+
+   Both are free, open-licensed, and stored inside the project rather than
+   fetched from a font CDN. That means the very first screen never waits on
+   the network, the app keeps working offline, and no user data is sent to a
+   third party.
+   -------------------------------------------------------------------------- */
+
+/* Baloo 2 -- rounded and chunky like a children's book, but built on real
+   letterform structure, so it stays readable in a way comic fonts do not. */
+@font-face {
+  font-family: 'Baloo 2';
+  src: url('./assets/fonts/Baloo2-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Atkinson Hyperlegible -- designed by the Braille Institute for low vision.
+   Easily confused characters (I l 1, 0 O, b d) are drawn to be distinct. */
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  src: url('./assets/fonts/AtkinsonHyperlegible-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible';
+  src: url('./assets/fonts/AtkinsonHyperlegible-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --------------------------------------------------------------------------
+   Design tokens
+
+   Every colour in the app is named here once. Components refer to the name,
+   never a raw hex value, so the whole palette can be adjusted from one place.
+
+   THE CONTRAST RULE THAT MAKES THIS PALETTE ACCESSIBLE:
+
+   All text is --color-ink on --color-cream. That pair measures 13.1:1,
+   which is far past the WCAG AAA requirement of 7:1.
+
+   The bright colours are for SHAPES ONLY, never for text. Measured against
+   cream they only reach coral 2.6:1, teal 2.8:1, yellow 1.5:1 -- none of them
+   can carry readable text. Because the rule is built in from the start, no
+   future screen can accidentally fail contrast by picking a brand colour for
+   a label. Every coloured shape is also outlined in ink, so it keeps a hard
+   high-contrast edge whatever sits behind it.
+   -------------------------------------------------------------------------- */
+:root {
+  /* foundation -- the only two colours that ever meet as text */
+  --color-cream: #fff7ec;       /* the canvas. warm off-white, not pure white,
+                                   which cuts glare for light-sensitive eyes */
+  --color-cream-warm: #ffefd9;  /* the soft glow behind the logo */
+  --color-ink: #2b2b3a;         /* every word and every drawn line */
+
+  /* primary -- the logo */
+  --color-coral: #ff6f5e;       /* the big bubble, "Buddy". SHAPES ONLY --
+                                   only 2.6:1 on cream, so it can never carry
+                                   text. Use --color-coral-text instead. */
+  --color-coral-text: #b22f1b;  /* the same hue darkened until it is readable:
+                                   6.0:1 on cream, 6.3:1 on white. This is the
+                                   ONLY coral allowed on a text label. */
+  --color-teal: #1fa8a0;        /* the answering bubble */
+
+  /* supporting -- small areas of the illustration only */
+  --color-yellow: #ffc93f;
+  --color-sky: #5aa9e6;
+  --color-green: #7bc96f;
+  --color-pink: #ffb3c1;
+
+  --font-display: 'Baloo 2', system-ui, sans-serif;
+  --font-body: 'Atkinson Hyperlegible', system-ui, sans-serif;
+}
+
+/* --------------------------------------------------------------------------
+   Reset and base
+   -------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+
+  /* Set here as well as on the splash so the very first paint is already
+     cream. Otherwise the browser flashes white before React has mounted. */
+  background-color: var(--color-cream);
+  color: var(--color-ink);
+
+  font-family: var(--font-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+
+  /* No sideways drag -- a child resting a hand on a tablet should not be able
+     to shove the screen around. Vertical scrolling stays available, because
+     the account form must remain reachable on a short window or at high
+     browser zoom. The splash screen blocks its own scrolling separately, via
+     `overflow: hidden` on `.splash`. */
+  overflow-x: hidden;
+  overscroll-behavior: none;
+}
+
+/* Keyboard focus must always be clearly visible, on every screen. */
+:focus-visible {
+  outline: 3px solid var(--color-coral);
+  outline-offset: 3px;
+}

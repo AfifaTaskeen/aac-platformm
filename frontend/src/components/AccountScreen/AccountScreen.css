@@ -1,0 +1,591 @@
+/* ==========================================================================
+   AccountScreen
+   ==========================================================================
+
+   SIZING STRATEGY -- read this first.
+
+   The splash screen sizes itself with `vmin`, which is correct there: it has
+   little content, so the composition should feel identical however the tablet
+   is held.
+
+   This screen is the opposite case. It has a tall form that MUST fit inside
+   the viewport, and a tablet has ~280px less height in landscape than in
+   portrait. Sizing by `vmin` gives both orientations the same measurements,
+   so a form that fits in portrait overflows in landscape.
+
+   So vertical measurements here are driven by `vh` -- 1% of the viewport
+   HEIGHT. When the screen gets shorter, the form gets tighter automatically,
+   which is exactly the behaviour needed. Every value is still a clamp(), so
+   nothing collapses on a small screen or inflates on a large one.
+
+   Two layout rules do the rest:
+     - short screens put the fields in TWO columns, halving the field stack
+     - there is no decorative illustration to compete for height
+
+   Measured content height for the sign-up view (the taller of the two):
+       834 x 1112 portrait    ~1061px into 1112px
+      1112 x  834 landscape    ~644px into  834px
+       768 x 1024 portrait    ~1001px into 1024px   (smallest common tablet)
+   ========================================================================== */
+
+.account {
+  min-height: 100dvh;
+  width: 100%;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  background-color: var(--color-cream);
+  position: relative;
+  overflow-x: hidden;
+
+  padding: clamp(16px, 2.2vh, 40px) clamp(16px, 4vmin, 48px);
+}
+
+/* --------------------------------------------------------------------------
+   The one piece of decoration kept: the same soft warm glow as the splash.
+   It is painted, not laid out, so it costs no height at all.
+   -------------------------------------------------------------------------- */
+.account__glow {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+
+  width: min(150vmin, 1000px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+
+  background: radial-gradient(
+    circle,
+    var(--color-cream-warm) 0%,
+    rgba(255, 239, 217, 0.55) 45%,
+    rgba(255, 239, 217, 0) 72%
+  );
+
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Brand header
+   -------------------------------------------------------------------------- */
+.account__brand {
+  display: flex;
+  align-items: center;
+  gap: clamp(9px, 1.4vh, 15px);
+
+  position: relative;
+  z-index: 2;
+  margin-bottom: clamp(10px, 1.6vh, 24px);
+  flex: none;
+}
+
+.account__logo {
+  width: clamp(38px, 5.2vh, 60px);
+  height: auto;
+  display: block;
+}
+
+.account__brand-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.35rem, 3.4vh, 2rem);
+  color: var(--color-ink);
+  line-height: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Body / card
+   -------------------------------------------------------------------------- */
+.account__body {
+  position: relative;
+  z-index: 2;
+
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  flex: none;
+}
+
+/*
+   The form sits DIRECTLY on the cream background -- no card, no border, no
+   shadow. This element is a pure layout wrapper: it holds the max-width and
+   gives the two-column field rule something to hang off.
+
+   Because there is no longer a card edge to sit inside, the horizontal
+   padding here is what keeps the fields clear of the screen edge.
+*/
+.account__panel {
+  width: 100%;
+  max-width: 520px;
+
+  padding-inline: clamp(4px, 2vmin, 20px);
+
+  display: flex;
+  flex-direction: column;
+  gap: clamp(12px, 1.9vh, 20px);
+}
+
+.account__intro {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.account__heading {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.5rem, 3.6vh, 2.3rem);
+  line-height: 1.12;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+/* The heading receives focus after switching views; it should not draw a ring
+   unless the user is actually navigating by keyboard. */
+.account__heading:focus {
+  outline: none;
+}
+
+.account__subheading {
+  font-family: var(--font-body);
+  font-size: clamp(0.9rem, 1.9vh, 1.15rem);
+  line-height: 1.35;
+  color: var(--color-ink);
+  opacity: 0.82;
+  margin: 0;
+}
+
+.account__form {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.5vh, 16px);
+}
+
+/*
+   The field grid. One column by default; the short-screen rule further down
+   switches it to two. `align-items: start` means an expanding error message
+   pushes only its own field down, not the one beside it.
+*/
+.account__fields {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: start;
+  gap: clamp(10px, 1.5vh, 16px);
+}
+
+/* --------------------------------------------------------------------------
+   Fields (styles for TextField.jsx)
+   -------------------------------------------------------------------------- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(4px, 0.6vh, 7px);
+  min-width: 0;
+}
+
+/* Label and hint share a row, so the password rule costs no extra height. */
+.field__labelrow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.field__label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(0.95rem, 1.85vh, 1.2rem);
+  color: var(--color-ink);
+  line-height: 1.25;
+}
+
+.field__hint {
+  font-family: var(--font-body);
+  font-size: clamp(0.75rem, 1.4vh, 0.95rem);
+  color: var(--color-ink);
+  opacity: 0.72;
+  line-height: 1.25;
+}
+
+.field__box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  border: 4px solid var(--color-ink);
+  border-radius: clamp(14px, 2.2vh, 20px);
+  /*
+     White, not cream. With the outer card gone the fields sit directly on the
+     cream background, so a cream fill would leave them reading as outlines on
+     the same colour. White keeps each field a distinct surface you can see is
+     meant to be typed into.
+  */
+  background: #ffffff;
+
+  padding: 0 clamp(8px, 1.2vh, 14px) 0 clamp(12px, 2vh, 20px);
+  min-height: clamp(52px, 6.2vh, 70px);
+
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+
+/* Focus lives on the wrapper so the ring surrounds the input AND the
+   Show/Hide button as one control. Colour AND a halo change, so the state is
+   never signalled by colour alone. */
+.field__box:focus-within {
+  border-color: var(--color-coral);
+  box-shadow: 0 0 0 5px rgba(255, 111, 94, 0.28);
+}
+
+/* Error keeps the ink border and adds a tinted fill. Combined with the icon
+   and the message below, the state survives greyscale. */
+.field__box--error {
+  background: #ffedea;
+}
+
+.field__input {
+  flex: 1;
+  min-width: 0;
+
+  border: none;
+  background: transparent;
+  outline: none;
+
+  font-family: var(--font-body);
+  font-size: clamp(1rem, 2.2vh, 1.3rem);
+  color: var(--color-ink);
+  padding: 10px 0;
+}
+
+.field__reveal {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  min-height: clamp(42px, 5vh, 54px);
+  padding: 0 clamp(8px, 1.2vh, 12px);
+
+  border: none;
+  background: transparent;
+  border-radius: 12px;
+  cursor: pointer;
+
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: clamp(0.8rem, 1.7vh, 1rem);
+  color: var(--color-ink);
+}
+
+.field__eye {
+  width: clamp(17px, 2.2vh, 22px);
+  height: clamp(17px, 2.2vh, 22px);
+  flex: none;
+}
+
+/* Only rendered when there is an error -- see the comment in TextField.jsx. */
+.field__error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0;
+
+  font-family: var(--font-body);
+  font-size: clamp(0.8rem, 1.7vh, 1rem);
+  line-height: 1.3;
+  color: var(--color-ink);
+}
+
+.field__error-icon {
+  width: clamp(15px, 2vh, 19px);
+  height: clamp(15px, 2vh, 19px);
+  flex: none;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+.account__forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+
+.account__link {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 6px 4px;
+
+  font-family: var(--font-body);
+  font-size: clamp(0.9rem, 1.9vh, 1.1rem);
+  color: var(--color-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Primary: coral fill, ink border, solid offset shadow. One per view. */
+.account__primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: 100%;
+  min-height: clamp(56px, 6.8vh, 78px);
+  padding: 8px 20px;
+
+  background: var(--color-coral);
+  border: 5px solid var(--color-ink);
+  border-radius: 999px;
+  box-shadow: 0 6px 0 rgba(43, 43, 58, 0.22);
+  cursor: pointer;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.15rem, 2.8vh, 1.75rem);
+  color: var(--color-ink);
+
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out;
+}
+
+/* Secondary: white fill, thinner border, smaller shadow. Same size, lower in
+   colour, so it reads as the alternative rather than a rival. */
+.account__google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(9px, 1.4vh, 14px);
+
+  width: 100%;
+  min-height: clamp(52px, 6.4vh, 74px);
+  padding: 8px 20px;
+
+  background: #ffffff;
+  border: 4px solid var(--color-ink);
+  border-radius: 999px;
+  box-shadow: 0 5px 0 rgba(43, 43, 58, 0.14);
+  cursor: pointer;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1rem, 2.3vh, 1.4rem);
+  color: var(--color-ink);
+
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out;
+}
+
+/* The Google mark keeps its own four brand colours -- recolouring it would
+   breach Google's brand terms and make it less recognisable. */
+.account__google-mark {
+  width: clamp(20px, 2.8vh, 28px);
+  height: clamp(20px, 2.8vh, 28px);
+  flex: none;
+}
+
+/* A physical press: the button moves down into its own shadow. Readable
+   without any colour change. */
+.account__primary:active,
+.account__google:active {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 rgba(43, 43, 58, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   Divider and switch row
+   -------------------------------------------------------------------------- */
+.account__divider {
+  display: flex;
+  align-items: center;
+  gap: clamp(10px, 1.6vh, 18px);
+
+  font-family: var(--font-body);
+  font-size: clamp(0.9rem, 1.9vh, 1.15rem);
+  color: var(--color-ink);
+}
+
+.account__divider::before,
+.account__divider::after {
+  content: '';
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(43, 43, 58, 0.22);
+}
+
+/*
+   A plain sentence on the cream -- no box, oval, pill or border. Only the
+   action word inside it is interactive.
+*/
+.account__switch {
+  margin: clamp(2px, 0.6vh, 8px) 0 0;
+  text-align: center;
+
+  font-family: var(--font-body);
+  font-size: clamp(0.9rem, 1.9vh, 1.15rem);
+  line-height: 1.4;
+
+  /*
+     Softened so the ink-black action word inside reads as the darker, more
+     prominent half of the sentence.
+
+     This uses a lighter COLOUR rather than `opacity`, deliberately: opacity
+     composites the whole subtree, so the button inside could not opt back out
+     of it and would fade with its parent. A colour is inherited, and the
+     button simply overrides it.
+
+     #5C5C6B is 6.2:1 on cream, comfortably past the 4.5:1 minimum, while the
+     ink button over it sits at 13.1:1 -- roughly twice as much contrast. That
+     gap is what makes the action word look darker. This lowers emphasis, not
+     legibility.
+  */
+  color: #5c5c6b;
+}
+
+/*
+   Sits inline in the sentence, so it reads as one line of text rather than a
+   control bolted on the end. It is still a real <button>: keyboard reachable,
+   announced as a button, and given a comfortable hit area through vertical
+   padding that does not disturb the line box.
+*/
+.account__switch-button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+
+  /* Generous padding for touch without adding height to the sentence. */
+  margin: 0;
+  padding: 10px 4px;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(0.95rem, 2vh, 1.25rem);
+  text-decoration: none;
+
+  /*
+     Ink, with no underline. What marks this word as the thing to press is
+     purely typographic: it is Baloo 2 Bold and a size larger against the
+     Atkinson regular sentence around it, and darker than that sentence
+     (which sits at 82% opacity). That contrast in weight and size is also
+     why it survives greyscale -- nothing here depends on colour.
+  */
+  color: var(--color-ink);
+}
+
+/* --------------------------------------------------------------------------
+   Status message (temporary -- stands in for the real backend call)
+   -------------------------------------------------------------------------- */
+.account__status:not(:empty) {
+  margin: 2px 0 0;
+
+  font-family: var(--font-body);
+  font-size: clamp(0.85rem, 1.8vh, 1.05rem);
+  line-height: 1.35;
+  text-align: center;
+  color: var(--color-ink);
+}
+
+/* Takes up no space at all until there is something to say. */
+.account__status:empty {
+  display: none;
+}
+
+/* ==========================================================================
+   SHORT SCREENS -- the landscape tablet case
+
+   Any viewport shorter than it is wide, and under ~900px tall. That covers a
+   landscape tablet, a laptop and a split-screen window, and never fires on a
+   portrait tablet however wide it is.
+
+   The fields go two-per-row, which halves the height of the field stack, and
+   the card widens to suit. Nothing else about the card changes.
+   ========================================================================== */
+@media (max-height: 900px) and (min-aspect-ratio: 1 / 1) {
+  .account__panel {
+    max-width: 700px;
+  }
+
+  .account__fields {
+    grid-template-columns: 1fr 1fr;
+    column-gap: clamp(14px, 2vw, 24px);
+  }
+
+  /*
+     In the sign-in view there are only two fields. Left in a two-column grid
+     they would sit side by side and look like an afterthought, so they span
+     the full width and the panel returns to its normal size.
+  */
+  .account__panel--signin {
+    max-width: 520px;
+  }
+
+  .account__panel--signin .account__fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   ANIMATION
+
+   Same philosophy as the splash: every element's NORMAL state is its final
+   visible state, and animations only bring it there from a hidden start using
+   `backwards` fill. Switching them off therefore leaves everything visible.
+   ========================================================================== */
+@keyframes account-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes account-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.account__brand {
+  animation: account-rise-in 400ms ease-out backwards;
+}
+.account__panel {
+  animation: account-rise-in 450ms ease-out 160ms backwards;
+}
+
+/*
+   Switching between Sign up and Sign in. The form has key={mode} in the JSX,
+   so React replaces it and this short fade replays -- a gentle change of
+   contents rather than a page transition. No sliding, no movement.
+*/
+.account__form {
+  animation: account-fade-in 260ms ease-out backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account__brand,
+  .account__panel,
+  .account__form {
+    animation: none;
+  }
+
+  .field__box {
+    transition: none;
+  }
+
+  /* The press effect stays: it is a direct response to a touch, not ambient
+     motion, and removing it would cost real feedback. */
+  .account__primary,
+  .account__google {
+    transition: none;
+  }
+}
