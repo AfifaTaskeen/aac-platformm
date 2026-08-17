@@ -80,6 +80,25 @@
   --color-green: #7bc96f;
   --color-pink: #ffb3c1;
 
+  /* --------------------------------------------------------------------
+     Surfaces and states
+
+     These name the ROLE a colour plays rather than the colour itself, which
+     is what lets a future theme redefine them in one place. Anything that
+     paints a panel, a muted label or a selected control should use these
+     rather than a literal hex.
+     -------------------------------------------------------------------- */
+  --color-surface: #ffffff;      /* a raised panel or an unselected control */
+  --color-muted-text: #5c5c6b;   /* secondary text. 6.2:1 on white, so this
+                                    is lower EMPHASIS, never lower legibility */
+  --color-selected: #e3daf9;     /* a chosen option's fill */
+  --color-selected-deep: #b49ce8; /* the same, pressed */
+  --color-on-accent: #ffffff;   /* text and icons sitting ON --color-accent */
+  --color-accent: #7a5fc4;       /* the settings hue: a deeper tone of the
+                                    same violet used for selection, dark
+                                    enough to carry white text (4.9:1) and to
+                                    read as a heading on cream (5.5:1) */
+
   --font-display: 'Baloo 2', system-ui, sans-serif;
   --font-body: 'Atkinson Hyperlegible', system-ui, sans-serif;
 }

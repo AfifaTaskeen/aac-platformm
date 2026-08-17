@@ -4,6 +4,8 @@ import RightMenu from './components/RightMenu'
 import Keyboard from './components/Keyboard'
 import CommunicationCard from './components/CommunicationCard'
 import PlaceholderDialog from './components/PlaceholderDialog'
+import SettingsDialog from './components/SettingsDialog'
+import { getGridSize, loadGridSize, saveGridSize } from './gridSize'
 import { BASIC_WORDS, CATEGORIES, cardsInCategory } from './cardData'
 import { speak, playAlert } from './speech'
 import './CommunicationBoard.css'
@@ -49,6 +51,14 @@ function CommunicationBoard({ childProfile }) {
    * as it crosses the board.
    */
   const [isPopping, setIsPopping] = useState(false)
+
+  /*
+   * The Grid Size setting. Read from localStorage on first render -- the
+   * lazy initialiser form runs once, so storage is not touched on every
+   * render.
+   */
+  const [gridSizeId, setGridSizeId] = useState(loadGridSize)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
@@ -114,13 +124,44 @@ function CommunicationBoard({ childProfile }) {
     return 3
   }
 
-  function rowsFor(cardCount) {
-    return Math.max(1, Math.ceil(cardCount / columnsForWidth(boardWidth)))
+  /* The Grid Size setting chosen in Settings. */
+  const gridSizeSetting = getGridSize(gridSizeId)
+
+  /*
+   * The column count actually used: what the screen would show, shifted by
+   * the Grid Size setting.
+   *
+   *   Small  +1 column  -> more, smaller cards
+   *   Medium  0         -> unchanged, today's layout exactly
+   *   Large  -1 column  -> fewer, larger cards
+   *
+   * Working in COLUMNS rather than pixels means the setting composes with
+   * the responsive breakpoints instead of overriding them: Large on a
+   * desktop still shows more across than Large on a tablet, and no size can
+   * produce cards too small to tap, because the floor is 1 column.
+   */
+  function effectiveColumns() {
+    const base = columnsForWidth(boardWidth)
+    return Math.max(1, base + gridSizeSetting.shift)
   }
 
-  /* Builds the inline variables the grid reads. */
+  function rowsFor(cardCount) {
+    return Math.max(1, Math.ceil(cardCount / effectiveColumns()))
+  }
+
+  /*
+   * Builds the inline variables the grid reads.
+   *
+   * --cols is now set here rather than by a CSS breakpoint, so the setting
+   * and the row arithmetic can never disagree -- they are computed from the
+   * same number.
+   */
   function gridStyleFor(cardCount) {
-    return { '--colw': minCardWidth, '--rows': rowsFor(cardCount) }
+    return {
+      '--colw': minCardWidth,
+      '--cols': effectiveColumns(),
+      '--rows': rowsFor(cardCount),
+    }
   }
 
   /*
@@ -338,7 +379,14 @@ function CommunicationBoard({ childProfile }) {
             the sentence bar or the toolbar.
           */}
           <div
-            className={`cboard__cards ${isPopping ? 'cboard__cards--popping' : ''}`}
+            className={[
+              'cboard__cards',
+              isPopping ? 'cboard__cards--popping' : '',
+              gridSizeId === 'small' ? 'cboard__cards--small' : '',
+              gridSizeId === 'large' ? 'cboard__cards--large' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
             ref={cardAreaRef}
           >
             {renderCardArea()}
@@ -351,13 +399,7 @@ function CommunicationBoard({ childProfile }) {
            * Settings, which is where configuration belongs. The dialog says so
            * explicitly, so the feature is not simply lost.
            */
-          onSettings={() =>
-            setDialog({
-              title: 'Settings',
-              message:
-                'Settings are coming next, and will include Edit Words for changing cards, pictures and audio. For now, grid size and voice can be changed in the child profile.',
-            })
-          }
+          onSettings={() => setIsSettingsOpen(true)}
           onCoreWords={() =>
             setDialog({
               title: 'Core Words',
@@ -376,6 +418,22 @@ function CommunicationBoard({ childProfile }) {
 
       {dialog && (
         <PlaceholderDialog title={dialog.title} message={dialog.message} onClose={() => setDialog(null)} />
+      )}
+
+      {isSettingsOpen && (
+        <SettingsDialog
+          gridSize={gridSizeId}
+          /*
+           * Applies immediately -- the board re-renders behind the open
+           * dialog, so the effect of a choice is visible while choosing it.
+           * The value is saved at the same moment, so a refresh keeps it.
+           */
+          onSelectGridSize={(id) => {
+            setGridSizeId(id)
+            saveGridSize(id)
+          }}
+          onClose={() => setIsSettingsOpen(false)}
+        />
       )}
     </div>
   )
