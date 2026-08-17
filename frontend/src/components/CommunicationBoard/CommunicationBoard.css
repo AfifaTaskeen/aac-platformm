@@ -697,7 +697,10 @@
   font-weight: 700;
   /* Deliberately large. Never shrunk to fit more on screen -- if space is
      tight, the caregiver chooses a smaller grid instead. */
-  font-size: clamp(1rem, 2.5vh, 1.6rem);
+  /* The default, matching .cboard--text-medium. Every kind of card label
+     uses this one size; the per-type overrides that made core words and
+     folder names bigger have been removed. */
+  font-size: clamp(1.4rem, 3.3vh, 2.15rem);
   color: var(--color-ink);
   line-height: 1.15;
   text-align: center;
@@ -726,18 +729,10 @@
    stacked layout as every other card -- no centring override, or the emoji
    and label would fight for the middle of the card.
 */
-.ccard--core .ccard__label {
-  font-size: clamp(1.3rem, calc(var(--rowh, 200px) * 0.22), 2.2rem);
-}
-
 /* A picture card whose image failed to load: same treatment, so the child
    still sees a usable word rather than a broken frame. */
 .ccard--noimage {
   justify-content: center;
-}
-
-.ccard--noimage .ccard__label {
-  font-size: clamp(1.1rem, 2.8vh, 1.8rem);
 }
 
 /*
@@ -894,10 +889,6 @@
 
 /* The folder name is the label a child reads to choose a category, so it is
    the largest text on any card. */
-.cfolder .ccard__label {
-  font-size: clamp(1.3rem, 3.2vh, 2.1rem);
-}
-
 /* A folder has no photograph competing for room, so its emoji can be
    considerably larger than the fallback emoji on a word card. */
 /* Folders and basic words have no photograph competing for room, so their
@@ -1373,6 +1364,92 @@
 
 
 /* ==========================================================================
+   TEXT SIZE
+
+   ONE rule per size, applied to EVERY card label.
+
+   There used to be four sizes per setting -- word cards, core words,
+   image-less cards and folder names each had their own -- which is why
+   You and Want came out visibly larger than Food and Actions at the
+   same setting. A single selector now covers all of them, so every label on
+   the board is the same size whatever kind of card carries it.
+
+   The selector list matches every label variant, and each is one class more
+   specific than the base rule it overrides, so it always wins.
+
+   Only card labels are listed. The sentence bar, sidebar, keyboard and the
+   settings panel are deliberately absent, so Text Size touches nothing else.
+   ========================================================================== */
+
+.cboard--text-small .ccard__label,
+.cboard--text-small .ccard--core .ccard__label,
+.cboard--text-small .ccard--noimage .ccard__label,
+.cboard--text-small .cfolder .ccard__label {
+  font-size: clamp(1.15rem, 2.7vh, 1.7rem);
+}
+
+.cboard--text-medium .ccard__label,
+.cboard--text-medium .ccard--core .ccard__label,
+.cboard--text-medium .ccard--noimage .ccard__label,
+.cboard--text-medium .cfolder .ccard__label {
+  font-size: clamp(1.4rem, 3.3vh, 2.15rem);
+}
+
+.cboard--text-large .ccard__label,
+.cboard--text-large .ccard--core .ccard__label,
+.cboard--text-large .ccard--noimage .ccard__label,
+.cboard--text-large .cfolder .ccard__label {
+  font-size: clamp(1.65rem, 3.9vh, 2.6rem);
+}
+
+/*
+   LONG WORDS at a large setting.
+
+   Applied to every label so the behaviour is uniform: words wrap rather
+   than overflowing, and a long one like Bathroom breaks instead of
+   pushing past the card edge. The line height is tightened a little so a
+   wrapped label still fits under the picture.
+*/
+.ccard__label {
+  overflow-wrap: anywhere;
+  hyphens: auto;
+  line-height: 1.12;
+  /* Never covers the picture: the label keeps its own space in the column
+     and the image box takes what is left. */
+  flex: none;
+  width: 100%;
+}
+
+/* ==========================================================================
+   GRID SIZE -- height behaviour
+
+   The row height is normally the available height divided by the row count,
+   which fills the screen. That works against the Small setting: narrower
+   columns produce MORE rows, but each row then gets a taller share, and the
+   card ends up no smaller in area than Medium.
+
+   Capping the row relative to the column width restores the intent -- a Small
+   card is smaller in both dimensions, a Large card bigger in both.
+   ========================================================================== */
+.cboard__cards--small .cboard__grid {
+  --rowh: clamp(
+    calc(var(--actual-colw) * 0.7),
+    calc((100% - 12px - (var(--rows) - 1) * var(--cgap)) / var(--rows)),
+    calc(var(--actual-colw) * 1.05)
+  );
+}
+
+/* Large is the mirror image: the row may grow further relative to the
+   column, so bigger columns really do give bigger cards. */
+.cboard__cards--large .cboard__grid {
+  --rowh: clamp(
+    calc(var(--actual-colw) * 0.8),
+    calc((100% - 12px - (var(--rows) - 1) * var(--cgap)) / var(--rows)),
+    calc(var(--actual-colw) * 1.3)
+  );
+}
+
+/* ==========================================================================
    SETTINGS PANEL
 
    A dedicated stage, not a small centred modal: it covers most of the screen
@@ -1468,6 +1545,39 @@
 .cpanel__iconbtn:active {
   transform: translateY(3px);
   box-shadow: 0 1px 0 rgba(43, 43, 58, 0.18);
+}
+
+/* --------------------------------------------------------------------------
+   Panel footer -- scroll controls
+
+   Only rendered when the body actually overflows, so it costs no space in
+   the common case. Mirrors the board's Up/Down buttons, which is why it
+   reuses .cpanel__iconbtn rather than introducing another button style.
+   -------------------------------------------------------------------------- */
+.cpanel__foot {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  gap: clamp(10px, 1.6vw, 18px);
+
+  padding: clamp(10px, 1.4vh, 16px);
+  border-top: 4px solid var(--color-ink);
+  background: var(--color-cream-warm);
+}
+
+/*
+   Disabled at the end of the travel. The border is kept at full strength so
+   the button does not look broken; only the fill flattens and the shadow
+   goes, so it stops looking raised.
+
+   A colour rather than `opacity`: opacity composites the whole subtree, so
+   the arrow inside would fade with it and could not opt back out.
+*/
+.cpanel__iconbtn:disabled {
+  background: var(--color-cream-warm);
+  color: var(--color-muted-text);
+  box-shadow: none;
+  cursor: not-allowed;
 }
 
 /* --------------------------------------------------------------------------

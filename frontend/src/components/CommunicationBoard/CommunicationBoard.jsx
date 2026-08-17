@@ -5,7 +5,13 @@ import Keyboard from './components/Keyboard'
 import CommunicationCard from './components/CommunicationCard'
 import PlaceholderDialog from './components/PlaceholderDialog'
 import SettingsDialog from './components/SettingsDialog'
-import { getGridSize, loadGridSize, saveGridSize } from './gridSize'
+import {
+  getGridSize,
+  loadGridSize,
+  saveGridSize,
+  loadTextSize,
+  saveTextSize,
+} from './boardSettings'
 import { BASIC_WORDS, CATEGORIES, cardsInCategory } from './cardData'
 import { speak, playAlert } from './speech'
 import './CommunicationBoard.css'
@@ -58,6 +64,10 @@ function CommunicationBoard({ childProfile }) {
    * render.
    */
   const [gridSizeId, setGridSizeId] = useState(loadGridSize)
+
+  /* The Text Size setting -- the size of the words on cards, nothing else. */
+  const [textSizeId, setTextSizeId] = useState(loadTextSize)
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false)
@@ -359,7 +369,15 @@ function CommunicationBoard({ childProfile }) {
      * being a sibling of everything: it must start BELOW the sentence bar,
      * and the sentence bar must reach all the way to the right edge.
      */
-    <div className="cboard">
+    <div
+      className={`cboard cboard--text-${textSizeId}`}
+      /*
+       * The class is what applies Text Size: CommunicationBoard.css states
+       * the label sizes for each one outright. Every card label -- word
+       * cards, core words, and FOLDER names -- is a descendant of this
+       * element, so a folder and the cards inside it change together.
+       */
+    >
       <TopBar
         words={sentence}
         canGoBack={canGoBack}
@@ -431,6 +449,11 @@ function CommunicationBoard({ childProfile }) {
           onSelectGridSize={(id) => {
             setGridSizeId(id)
             saveGridSize(id)
+          }}
+          textSize={textSizeId}
+          onSelectTextSize={(id) => {
+            setTextSizeId(id)
+            saveTextSize(id)
           }}
           onClose={() => setIsSettingsOpen(false)}
         />

@@ -1,7 +1,11 @@
 /*
- * gridSize.js
- * -----------
- * The Grid Size setting: how many cards the board shows at once.
+ * boardSettings.js
+ * ----------------
+ * The board's display settings: Grid Size and Text Size.
+ *
+ * Both follow the same shape -- a list of options, a default, and load/save
+ * helpers -- so the Settings panel can render either without special cases,
+ * and a third setting can be added here without touching the UI.
  *
  * Separate from the components so the board, the settings dialog and the
  * persistence all read one definition. Adding a size later means editing
@@ -72,6 +76,61 @@ export function loadGridSize() {
 export function saveGridSize(id) {
   try {
     window.localStorage.setItem(STORAGE_KEY, id)
+  } catch {
+    // Saving failed; the choice still applies for this session.
+  }
+}
+
+/* -------------------------------------------------------------------------
+   TEXT SIZE
+
+   The size of the words on communication cards, and nothing else. It is a
+   MULTIPLIER rather than a set of fixed sizes, so the existing relationships
+   hold: a folder name stays larger than a word card's label at every
+   setting, and every size still scales with the viewport.
+   ------------------------------------------------------------------------- */
+export const TEXT_SIZES = [
+  {
+    id: 'small',
+    label: 'Small',
+    scale: 0.85,
+    description: 'Smaller text',
+  },
+  {
+    id: 'medium',
+    label: 'Medium',
+    scale: 1,
+    description: 'Standard text',
+  },
+  {
+    id: 'large',
+    label: 'Large',
+    scale: 1.2,
+    description: 'Larger text',
+  },
+]
+
+export const DEFAULT_TEXT_SIZE = 'medium'
+
+const TEXT_STORAGE_KEY = 'buddytalk.textSize'
+
+export function getTextSize(id) {
+  return TEXT_SIZES.find((s) => s.id === id) || TEXT_SIZES.find((s) => s.id === DEFAULT_TEXT_SIZE)
+}
+
+export function loadTextSize() {
+  try {
+    const saved = window.localStorage.getItem(TEXT_STORAGE_KEY)
+    if (saved && TEXT_SIZES.some((s) => s.id === saved)) return saved
+  } catch {
+    // Storage unavailable -- fall through to the default.
+  }
+  return DEFAULT_TEXT_SIZE
+}
+
+export function saveTextSize(id) {
+  try {
+    window.localStorage.setItem(TEXT_STORAGE_KEY, id)
   } catch {
     // Saving failed; the choice still applies for this session.
   }
