@@ -4,6 +4,7 @@ import AccountScreen from './components/AccountScreen/AccountScreen'
 import ForgotPasswordScreen from './components/AccountScreen/ForgotPasswordScreen'
 import ResetPasswordScreen from './components/AccountScreen/ResetPasswordScreen'
 import ChildProfileScreen from './components/ChildProfile/ChildProfileScreen'
+import CommunicationBoard from './components/CommunicationBoard/CommunicationBoard'
 import { API_BASE_URL, EMAIL_PATTERN } from './components/AccountScreen/authConfig'
 import './App.css'
 
@@ -190,25 +191,11 @@ function App() {
     }
 
     /*
-     * TEMPORARY PLACEHOLDER -- the AAC board has not been built yet.
-     * The saved grid size is shown here to prove it was stored and read back;
-     * the real board will use childProfile.gridSize to lay out its cards.
+     * The communication board. It reads gridSize and voice from the saved
+     * profile -- the caregiver's choices in Child Profile are what shape it,
+     * so the board never asks again and never writes back.
      */
-    return (
-      <div className="app-placeholder">
-        <p>
-          Child profile saved successfully.
-          <br />
-          <br />
-          <strong>{childProfile?.childName}</strong>
-          {childProfile?.gridSize ? ` · ${childProfile.gridSize} × ${childProfile.gridSize} grid` : ''}
-          {childProfile?.voice ? ` · ${childProfile.voice} voice` : ''}
-          <br />
-          <br />
-          The Buddy Talk board goes here next.
-        </p>
-      </div>
-    )
+    return <CommunicationBoard childProfile={childProfile} />
   }
 
   /* Step 2 of a password reset, reached from the emailed link. */

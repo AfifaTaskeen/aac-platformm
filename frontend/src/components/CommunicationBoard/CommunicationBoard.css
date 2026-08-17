@@ -1,0 +1,1172 @@
+/* ==========================================================================
+   Communication board
+
+   Same visual language as the rest of Buddy Talk: cream background, ink
+   borders, generous radii, flat offset shadows, Baloo 2 for anything that
+   is pressed and Atkinson for prose. Every colour is an existing token --
+   nothing new is introduced here.
+
+   LAYOUT
+   ------
+   The page is a fixed-height frame, not a scrolling document: the sentence
+   bar and the toolbar stay exactly where they are, and only the card area
+   moves. For a child with limited reach that matters -- controls that drift
+   off the screen are controls they cannot press.
+   ========================================================================== */
+
+/*
+   TWO ROWS, not two columns:
+
+     row 1  back arrow + sentence bar, spanning the FULL width
+     row 2  card area + toolbar, side by side
+
+   The toolbar therefore begins below the sentence bar, and the sentence bar
+   reaches all the way to the right edge.
+*/
+.cboard {
+  height: 100dvh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-cream);
+  overflow: hidden;
+  padding: clamp(6px, 1vh, 10px);
+  gap: clamp(6px, 0.9vh, 10px);
+
+  /*
+     A darker edge than the app's ink (#2b2b3a) for the controls that must be
+     found instantly: the back arrow and the three sentence buttons. Near
+     black, but not pure #000 -- a hair of warmth keeps it from looking like
+     a harsh cut-out against the cream.
+
+     Scoped to the board, so the account and profile screens keep their
+     existing ink borders untouched.
+  */
+  --color-edge: #14141c;
+}
+
+/* Row 2. The toolbar is a child of THIS row, which is what makes it start
+   below the sentence bar and run the full height of the card area.
+
+   Moving the toolbar to the left later is `row-reverse` here and nothing
+   else -- the reason it stayed a separate component. */
+.cboard__lower {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  gap: clamp(6px, 0.8vw, 10px);
+}
+
+.cboard__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --------------------------------------------------------------------------
+   Top bar: back, sentence, actions
+   -------------------------------------------------------------------------- */
+.cbar {
+  display: flex;
+  align-items: stretch;
+  gap: clamp(6px, 0.8vw, 10px);
+  flex: none;
+}
+
+/*
+   Back: larger than the other top controls and given the teal fill, so it is
+   found instantly. It is the child's way out of a folder, which makes it the
+   most important navigation control on the screen.
+*/
+.cbar__back {
+  flex: none;
+  /* Matches the sentence panel's height, so the top row reads as one band. */
+  width: clamp(90px, 11.5vh, 130px);
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  /*
+     Light teal when inactive, with a thick near-black border and a
+     near-black arrow. The border is the darker --color-edge and a step
+     thicker than the cards', which is what makes it read as a control
+     rather than another card.
+  */
+  background: #cdeae8;
+  border: 6px solid var(--color-edge);
+  border-radius: clamp(16px, 2.6vh, 24px);
+  box-shadow: 0 6px 0 rgba(20, 20, 28, 0.3);
+  color: var(--color-edge);
+  cursor: pointer;
+
+  transition: background-color 90ms ease-out, transform 90ms ease-out,
+    box-shadow 90ms ease-out;
+}
+
+/* A big, unmistakable arrow -- thick strokes, filling most of the button. */
+.cbar__back svg {
+  width: 72%;
+  height: 72%;
+}
+
+/* Pressed: clearly darker, and sunk into its own shadow. */
+.cbar__back:active:not(:disabled) {
+  background: #6cbfba;
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 rgba(43, 43, 58, 0.2);
+}
+
+/*
+   Disabled controls KEEP their border colour rather than fading it -- a
+   greyed outline made the button look broken instead of temporarily
+   unavailable.
+
+   There is deliberately no border-color here at all, so each control keeps
+   whatever border it already had: the back arrow and the three sentence
+   buttons stay black (--color-edge), while the sidebar and keyboard keep the
+   standard ink. Nothing here promotes a control to the darker border.
+
+   The state is still carried by three things that are not the border:
+   a flat pale fill, dimmer text and icon, and no drop shadow -- so the
+   button no longer looks raised and pressable. It reads correctly in
+   greyscale.
+*/
+.cbar__back:disabled,
+.cbtn:disabled,
+.cmenu__btn:disabled,
+.ckeys__key:disabled {
+  background: #ece7de;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/*
+   The back arrow and the three sentence buttons are disabled before the
+   child has tapped anything -- which is exactly when they are first seen.
+   Their icon and label stay BLACK there, so the symbols are legible from the
+   moment the board opens rather than starting out greyed.
+
+   The unavailable state is still carried by the flat fill and the missing
+   drop shadow, so nothing depends on the icon colour to communicate it.
+*/
+.cbar__back:disabled,
+.cbtn:disabled {
+  color: var(--color-edge);
+}
+
+/* The sidebar and keyboard keep the softer grey when disabled: those are
+   secondary controls, and Up/Down being obviously inert is useful. */
+.cmenu__btn:disabled,
+.ckeys__key:disabled {
+  color: #5a564f;
+}
+
+/*
+   The bar itself. It carries the white panel, the border and the rounding;
+   the sentence and the three buttons both sit INSIDE it, so the whole thing
+   reads as one control rather than a row of separate blocks.
+*/
+.cbar__panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 0.9vw, 12px);
+
+  background: #ffffff;
+  /* The standard ink, like the cards: this is the surface the sentence sits
+     on, not one of the four controls that carry the darker black. */
+  border: 5px solid var(--color-ink);
+  border-radius: clamp(16px, 2.6vh, 24px);
+  padding: clamp(7px, 1vh, 12px);
+  min-height: clamp(84px, 10.5vh, 122px);
+}
+
+/* The sentence the child is building: the most important thing on screen,
+   so it gets the most room and the largest type. It is now transparent --
+   the panel above provides the surface. */
+.cbar__sentence {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+
+  padding: 0 clamp(8px, 1.2vw, 16px);
+  align-self: stretch;
+  overflow-x: auto;
+}
+
+.cbar__words {
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 0.9vw, 12px);
+  flex-wrap: wrap;
+}
+
+/* Each word is a chip, so a long sentence stays readable as separate words
+   rather than one run-on line. */
+.cbar__word {
+  display: inline-flex;
+  align-items: center;
+  padding: clamp(3px, 0.5vh, 7px) clamp(8px, 1.1vw, 14px);
+
+  background: var(--color-cream-warm);
+  border: 3px solid var(--color-ink);
+  border-radius: 999px;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  /* The sentence is what the child is saying, so it carries the largest
+     type on the screen. */
+  font-size: clamp(1.15rem, 3vh, 1.9rem);
+  color: var(--color-ink);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.cbar__placeholder {
+  font-family: var(--font-body);
+  font-size: clamp(0.85rem, 1.9vh, 1.15rem);
+  color: #5c5c6b;
+}
+
+.cbar__actions {
+  flex: none;
+  display: flex;
+  gap: clamp(4px, 0.6vw, 8px);
+}
+
+/*
+   Speak / Delete / Clear.
+
+   Each gets its OWN colour, so the three are told apart by shape, icon,
+   colour and word together -- four cues, no reliance on any single one. All
+   three fills are light-to-mid tones carrying ink text, which keeps the
+   labels dark and high-contrast rather than pale-on-bright.
+*/
+.cbtn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+
+  min-width: clamp(84px, 10vw, 124px);
+  /* Fills the panel's inner height, so the three buttons sit flush inside
+     the bar rather than floating in it. */
+  align-self: stretch;
+  padding: clamp(6px, 1vh, 12px) clamp(8px, 1.2vw, 18px);
+
+  background: #ffffff;
+  /* The darker edge, matching the back arrow. */
+  border: 5px solid var(--color-edge);
+  border-radius: clamp(13px, 2.1vh, 19px);
+  box-shadow: 0 5px 0 rgba(20, 20, 28, 0.22);
+  cursor: pointer;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  /* Never small: this is the floor, and it grows with the viewport. */
+  font-size: clamp(0.95rem, 2vh, 1.25rem);
+  /*
+     The same black as the border. The icons are drawn with
+     stroke="currentColor", so this colours the symbol as well as the label,
+     matching the outline around it.
+  */
+  color: var(--color-edge);
+  line-height: 1.1;
+
+  transition: background-color 90ms ease-out, transform 90ms ease-out,
+    box-shadow 90ms ease-out;
+}
+
+.cbtn svg {
+  width: clamp(28px, 4vh, 40px);
+  height: clamp(28px, 4vh, 40px);
+}
+
+/*
+   Pastel fills with a darker tone of the same hue for the pressed state,
+   set as --deep so one rule below handles all three.
+*/
+.cbtn--speak {
+  background: #ffd9d2;
+  --deep: #f79280;
+}
+
+.cbtn--delete {
+  background: #ffeeb8;
+  --deep: #f5cf57;
+}
+
+.cbtn--clear {
+  background: #ffdfe6;
+  --deep: #f7a8bb;
+}
+
+/* Pressed: darker fill AND the physical sink -- two signals, not one. */
+.cbtn:active:not(:disabled) {
+  background: var(--deep, #e6e0d6);
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 rgba(43, 43, 58, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   The scrolling card area
+   -------------------------------------------------------------------------- */
+.cboard__cards {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  /*
+     Room for the last row's shadow, so it is not clipped mid-scroll.
+     border-box matters here: the row arithmetic below uses 100% of this
+     element, and without it that percentage would exclude the padding and
+     the last row would overflow by exactly that much.
+  */
+  box-sizing: border-box;
+  padding: 2px 2px 10px;
+
+  /* Kinetic scrolling on touch, and snappier stops. */
+  -webkit-overflow-scrolling: touch;
+
+  --cgap: clamp(6px, 1vh, 12px);
+
+  /*
+     ROW HEIGHT -- this is what stops the bottom cards being clipped.
+
+     The board sets --rows to how many rows its content needs (see
+     CommunicationBoard.jsx). Dividing this container's own height by that
+     count gives a row height that always fits, however many cards there are.
+
+     100% here is the container's height, which flex has already resolved
+     from the space left below the top bar -- so the arithmetic follows the
+     real viewport rather than a guess.
+
+     The min() keeps a row from becoming absurdly tall when there are only
+     one or two rows, and the max() keeps it tappable when there are many.
+  */
+  /*
+     Row height, bounded at both ends:
+
+       - the height budget (this container / rows needed) is the IDEAL, so
+         everything fits on screen without scrolling
+       - but never below 0.95x the column width, so a card is never squashed
+         into a letterbox just to make one more row fit
+
+     When those conflict -- a portrait tablet showing all 13 cards -- the
+     floor wins and the area scrolls a little. That is the right trade for an
+     AAC board: a readable, properly proportioned card matters more than
+     fitting everything without scrolling, and Up/Down exist for exactly this.
+     Nothing is CLIPPED either way; the last row is always reachable.
+  */
+  /*
+     The column width the grid will actually produce: the container divided
+     by the column count. Deriving the row height from THIS rather than from
+     --colw is what keeps the card's proportions sensible now that the
+     column count is fixed by breakpoints -- a 5-column desktop row makes
+     wide columns, and a row height pinned to 190px would have left the
+     cards as landscape rectangles.
+  */
+  --actual-colw: calc((100% - (var(--cols) - 1) * var(--cgap)) / var(--cols));
+
+  /*
+     Row height: the height budget, but never so short that the card becomes
+     a letterbox (0.78x the column width) nor so tall that it wastes the
+     screen (1.2x). When the budget conflicts with the floor -- 13 cards on a
+     portrait tablet -- the floor wins and the area scrolls slightly, which
+     is what Up/Down are for. Nothing is ever clipped.
+  */
+  --rowh: clamp(
+    calc(var(--actual-colw) * var(--min-ratio, 0.78)),
+    calc((100% - 12px - (var(--rows) - 1) * var(--cgap)) / var(--rows)),
+    calc(var(--actual-colw) * 1.2)
+  );
+}
+
+/*
+   The grid. --cols is set inline from the child's saved profile (2, 3 or 4),
+   so the caregiver's choice in Child Profile is what decides the column
+   count. minmax(0, 1fr) lets columns shrink properly instead of being forced
+   wider by their contents.
+*/
+/*
+   Columns are capped at the card's natural maximum width, so on a wide
+   screen the COLUMNS narrow and the cards stay close together, rather than
+   the columns staying wide and the cards drifting apart inside them.
+
+   justify-content: center keeps the whole block centred once the columns
+   stop growing.
+
+   Gaps are deliberately tight -- this should read as a compact communication
+   device, not a spaced-out web page.
+*/
+.cboard__grid {
+  display: grid;
+  /*
+     auto-fit with 1fr, NOT a fixed column width.
+
+     A fixed width meant the columns never grew, which left a wide empty
+     strip between the grid and the sidebar. auto-fit fills the row instead:
+     the browser fits as many --colw-wide columns as it can, then shares the
+     remainder between them.
+
+     --colw is therefore a MINIMUM, which is what makes the column count
+     responsive on its own -- about 5 across on a laptop and 4 on a portrait
+     tablet, with no breakpoint naming either number.
+  */
+  /*
+     A FIXED column count per breakpoint rather than auto-fit.
+
+     auto-fit fitted as many columns as the width allowed, which reached 8
+     across on a desktop -- far more than an AAC board should show, and it
+     made every card small. --cols is set by the breakpoints at the bottom of
+     this file: 3 on a tablet, 4-5 on a laptop.
+
+     minmax(0, 1fr) lets the columns share the full width equally, so the
+     gaps stay even and no empty strip is left beside the grid.
+  */
+  grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+  gap: var(--cgap);
+
+  /*
+     Rows take their height from --rowh, which is computed from the space
+     actually available (see .cboard__cards). Sizing rows from the card's
+     WIDTH is what previously made the bottom row overflow and clipped the
+     last folders off the screen.
+  */
+  grid-auto-rows: var(--rowh);
+  align-content: start;
+}
+
+.cboard__empty {
+  margin: clamp(16px, 3vh, 32px) 0 0;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: clamp(0.95rem, 2vh, 1.2rem);
+  color: var(--color-ink);
+}
+
+/* --------------------------------------------------------------------------
+   A communication card
+   -------------------------------------------------------------------------- */
+/*
+   A uniform card.
+
+   `aspect-ratio` is what makes every card the SAME size and shape: the grid
+   sets the width, and the height follows from it. Without this, a card with
+   a long word grew taller than its neighbours and the grid looked ragged.
+
+   4/5 is slightly taller than wide, which leaves a large square for the
+   picture with the word beneath it.
+*/
+.ccard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(4px, 0.8vh, 10px);
+
+  /*
+     Standard card size, set for TABLET use -- the device this is built for.
+
+     aspect-ratio keeps every card the same SHAPE whatever its word length,
+     but on its own it makes height follow width: on a landscape tablet a
+     3-wide grid gave ~290px columns and therefore ~360px-tall cards, so only
+     one row was visible and the child had to scroll constantly.
+
+     max-height caps that. Cards stay uniform and comfortably large, and two
+     or three rows fit on screen in both orientations. min-height is the
+     floor for the narrow 4-wide case.
+  */
+  /*
+     Standard card size for TABLET use.
+
+     The GRID caps the column width (see .cboard__grid), so the card simply
+     fills its column and takes its height from the 4/5 ratio. An earlier
+     version capped max-width on the card itself, which left dead space
+     inside every column and pushed the cards visibly apart -- the grid is
+     the right place to do it, because then the columns themselves narrow
+     and the cards stay close together.
+  */
+  /*
+     The card FILLS its grid cell. The grid controls both dimensions -- the
+     column width from --colw and the row height from --rowh -- so every card
+     is identical, and the row height is what guarantees the bottom row is
+     never clipped.
+
+     No aspect-ratio here: it would override the row height and reintroduce
+     the overflow. The cell's own proportions stay sensible because --rowh is
+     bounded (120px floor, 34vh ceiling).
+  */
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: clamp(6px, 1vh, 12px);
+
+  /*
+     --tint is set inline from the card's category; white is the fallback for
+     anything without one. The pressed rule swaps in --deep, so the darker
+     state is one line rather than a colour per category.
+  */
+  background: var(--tint, #ffffff);
+  border: 5px solid var(--color-ink);
+  border-radius: clamp(16px, 2.6vh, 24px);
+  /*
+     The category accent as a band just inside the dark border -- an inset
+     ring, so the colour is unmistakable without weakening the black outline
+     that gives the card its definition. The second shadow is the usual
+     offset drop.
+  */
+  box-shadow: inset 0 0 0 4px var(--accent, transparent),
+    0 6px 0 rgba(43, 43, 58, 0.16);
+  cursor: pointer;
+
+  transition: background-color 120ms ease-out, transform 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+/*
+   Pressed: the card darkens to its category's deeper tone and sinks into its
+   own shadow. Both the colour AND the movement change, so the state is never
+   carried by colour alone.
+*/
+.ccard:active {
+  background: var(--deep, #f0ece5);
+  transform: translateY(4px);
+  /* Keeps the accent ring while shrinking the drop shadow. */
+  box-shadow: inset 0 0 0 4px var(--accent, transparent),
+    0 2px 0 rgba(43, 43, 58, 0.24);
+}
+
+/*
+   The photograph's frame.
+
+   White rather than cream: the photos are letterboxed (object-fit: contain),
+   so whatever sits behind them shows around the edges. A neutral white reads
+   as part of the picture and keeps the card's category colour uninterrupted
+   by a THIRD tone, which cream introduced.
+*/
+.ccard__imagebox {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: clamp(10px, 1.8vh, 16px);
+  background: #ffffff;
+}
+
+/*
+   `contain`, not `cover`: a photograph of food should never be cropped so
+   far that the child cannot recognise it. Letterboxing on the cream
+   background is the lesser cost.
+*/
+.ccard__image {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* The emoji fallback, shown only when a photograph fails to load. Sized to
+   fill the picture area so it is recognisable at a glance. */
+/*
+   An emoji needs no backing panel -- it is a shape, not a photograph with
+   edges to contain. Transparent, so the card reads as ONE colour: an Actions
+   folder is blue all the way through, with no cream block behind its icon.
+*/
+.ccard__imagebox--emoji {
+  background: transparent;
+}
+
+/*
+   Sized from the CARD's own height (--rowh), not the viewport. A viewport
+   unit ignored how tall the card actually was, so on a short card the emoji
+   crowded the word beneath it. At 42% of the row it always leaves room for
+   the label, whatever the grid works out to.
+*/
+.ccard__emoji {
+  font-size: clamp(1.8rem, calc(var(--rowh, 200px) * 0.42), 4.2rem);
+  line-height: 1;
+}
+
+.ccard__label {
+  flex: none;
+  font-family: var(--font-display);
+  font-weight: 700;
+  /* Deliberately large. Never shrunk to fit more on screen -- if space is
+     tight, the caregiver chooses a smaller grid instead. */
+  font-size: clamp(1rem, 2.5vh, 1.6rem);
+  color: var(--color-ink);
+  line-height: 1.15;
+  text-align: center;
+  /* Long words shrink rather than overflowing their card. */
+  overflow-wrap: anywhere;
+}
+
+/*
+   Core words carry no picture, so the word itself fills the card. They keep
+   the same width as picture cards but sit shorter -- a wide, flat shape that
+   is instantly distinguishable from a picture card without needing colour.
+*/
+/*
+   Core words keep the SAME 4/5 shape as every other card. They previously
+   used aspect-ratio: auto, which made them shorter than the folders beside
+   them in the same grid row -- the uneven-height problem. They stay
+   distinguishable by their warm cream fill and much larger word instead.
+*/
+/*
+   Basic words carry no picture, so the word is centred and fills the card.
+   All eight share one violet --tint, set inline, so they read as a single
+   group rather than eight unrelated colours.
+*/
+.ccard--core {
+  justify-content: center;
+}
+
+.ccard--core .ccard__label {
+  font-size: clamp(1.4rem, calc(var(--rowh, 200px) * 0.24), 2.4rem);
+}
+
+/* A picture card whose image failed to load: same treatment, so the child
+   still sees a usable word rather than a broken frame. */
+.ccard--noimage {
+  justify-content: center;
+}
+
+.ccard--noimage .ccard__label {
+  font-size: clamp(1.1rem, 2.8vh, 1.8rem);
+}
+
+/*
+   The tap animation: the card lifts and grows very slightly, then settles.
+   Short and subtle by design -- it confirms the tap without becoming a
+   distraction, and without delaying the word appearing in the sentence.
+*/
+@keyframes ccard-pop {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.06) translateY(-4px);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/*
+   The confirmation shown for a moment AFTER the finger lifts: the card
+   darkens to its deep tone and keeps a coral rim, so the tap is obvious even
+   if the press itself was brief.
+*/
+.ccard--tapped {
+  animation: ccard-pop 260ms ease-out;
+  background: var(--deep, var(--color-cream-warm));
+  border-color: var(--color-coral);
+  box-shadow: inset 0 0 0 4px var(--accent, transparent),
+    0 6px 0 rgba(255, 111, 94, 0.35);
+}
+
+/* --------------------------------------------------------------------------
+   Category folders
+
+   A folder is now the SAME card shape as a word card -- the protruding tab
+   has gone -- so the grid is one even run. It reuses .ccard for its size,
+   border, radius and pressed state; only the label weight differs, giving
+   the folder name a little more presence than a word.
+   -------------------------------------------------------------------------- */
+.cfolder {
+  /* Nothing to add: .ccard and the inline --tint carry the whole design. */
+  justify-content: center;
+}
+
+/* The folder name is the label a child reads to choose a category, so it is
+   the largest text on any card. */
+.cfolder .ccard__label {
+  font-size: clamp(1.3rem, 3.2vh, 2.1rem);
+}
+
+/* A folder has no photograph competing for room, so its emoji can be
+   considerably larger than the fallback emoji on a word card. */
+.cfolder .ccard__emoji {
+  /* A folder has no photograph competing for room, so its emoji takes a
+     larger share of the card than a word card's fallback does. */
+  font-size: clamp(2rem, calc(var(--rowh, 200px) * 0.48), 4.6rem);
+}
+
+/* --------------------------------------------------------------------------
+   Right-side menu
+   -------------------------------------------------------------------------- */
+/*
+   The toolbar. Narrower than before (was 84-132px) so it takes less
+   horizontal space from the cards, while still clearing the 44px minimum
+   touch target with room to spare.
+
+   It fills the height of the lower row, so it runs the full depth of the
+   card area rather than stopping short.
+*/
+.cmenu {
+  flex: none;
+  /* Wider, so "Core Words" and "Settings" read as labels rather than being
+     squeezed -- a control panel, not a thin strip. */
+  width: clamp(96px, 10vw, 132px);
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(4px, 0.7vh, 8px);
+
+  padding: clamp(5px, 0.9vh, 10px) clamp(4px, 0.6vw, 8px);
+  background: var(--color-cream-warm);
+  /* Now a bordered panel rather than a page-edge divider, since it no longer
+     runs the whole height of the screen. */
+  border: 4px solid var(--color-ink);
+  border-radius: clamp(14px, 2.2vh, 20px);
+  overflow-y: auto;
+}
+
+/*
+   Sidebar buttons: vertically elongated rather than small squares, so the
+   icon and label both have room. Each carries its own pastel with a matching
+   --deep for the pressed state.
+*/
+.cmenu__btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(3px, 0.6vh, 7px);
+
+  /*
+     The buttons SHARE the column's height rather than each taking a fixed
+     size: flex: 1 lets them grow to fill it, so the strip is one compact
+     run of controls with no dead space at the bottom. The min-height is the
+     floor when the screen is short.
+  */
+  flex: 1 1 auto;
+  min-height: clamp(64px, 9vh, 108px);
+  padding: clamp(6px, 1vh, 12px) 4px;
+
+  background: #ffffff;
+  border: 4px solid var(--color-ink);
+  border-radius: clamp(12px, 2vh, 18px);
+  box-shadow: 0 5px 0 rgba(43, 43, 58, 0.14);
+  cursor: pointer;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  /* Readable, not shrunk to fit: the strip widens instead. */
+  font-size: clamp(0.72rem, 1.6vh, 1rem);
+  color: var(--color-ink);
+  line-height: 1.1;
+  text-align: center;
+
+  transition: background-color 90ms ease-out, transform 90ms ease-out,
+    box-shadow 90ms ease-out;
+}
+
+.cmenu__btn svg {
+  width: clamp(26px, 3.6vh, 38px);
+  height: clamp(26px, 3.6vh, 38px);
+}
+
+/* Harmonious pastels: the same family as the cards, each distinct. */
+.cmenu__btn--keyboard {
+  background: #cdeae8;
+  --deep: #6cbfba;
+}
+
+.cmenu__btn--core {
+  background: #e6ddf7;
+  --deep: #b49fe0;
+}
+
+/* Up green, Down yellow: different colours, so the pair is told apart by
+   more than the arrow direction alone. */
+.cmenu__btn--up {
+  background: #dff5d3;
+  --deep: #a3d495;
+}
+
+.cmenu__btn--down {
+  background: #fff2c9;
+  --deep: #f5cf57;
+}
+
+/* Orange, now that Down has taken the yellow. */
+.cmenu__btn--alert {
+  background: #ffdfcd;
+  --deep: #f9a58e;
+}
+
+.cmenu__btn--settings {
+  background: #e4e2de;
+  --deep: #b3aea6;
+}
+
+/* Pressed: darker fill and the physical sink. */
+.cmenu__btn:active:not(:disabled) {
+  background: var(--deep, #e6e0d6);
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 rgba(43, 43, 58, 0.2);
+}
+
+/* The Up/Down arrows are the meaning of those buttons, so they are drawn
+   larger than the other icons. */
+.cmenu__btn--arrow svg {
+  width: clamp(30px, 4.2vh, 44px);
+  height: clamp(30px, 4.2vh, 44px);
+}
+
+/*
+   Keyboard stays the most prominent control: taller than its neighbours,
+   with a larger icon and label. Its colour is set with the other pastels
+   above; only the emphasis lives here.
+*/
+.cmenu__btn--keyboard {
+  /* Takes a larger share of the column than its neighbours (1.4 against
+     their 1), so it stays the most prominent control while the strip still
+     divides the height evenly between everything. */
+  flex-grow: 1.4;
+  font-size: clamp(0.8rem, 1.8vh, 1.1rem);
+  border-width: 5px;
+}
+
+.cmenu__btn--keyboard svg {
+  width: clamp(32px, 4.6vh, 46px);
+  height: clamp(32px, 4.6vh, 46px);
+}
+
+/*
+   The keyboard toggle while the keyboard is OPEN. Deliberately the deep tone
+   rather than a new colour, so "held down" looks like the pressed state it
+   is -- plus the sunk shadow and aria-pressed in the markup: three signals.
+*/
+.cmenu__btn--on {
+  background: #6cbfba;
+  box-shadow: 0 2px 0 rgba(43, 43, 58, 0.28);
+  transform: translateY(3px);
+}
+
+/* Pushes Alert and Settings to the bottom, whatever the strip's height. */
+/*
+   The spacer that used to push Alert and Settings to the bottom has gone:
+   the buttons now share the column height between them, which is what makes
+   the strip one compact run of controls with no gap in the middle.
+*/
+
+/* --------------------------------------------------------------------------
+   On-screen keyboard
+   -------------------------------------------------------------------------- */
+.ckeys {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.4vh, 16px);
+  height: 100%;
+}
+
+.ckeys__top {
+  display: flex;
+  align-items: stretch;
+  gap: clamp(8px, 1.2vw, 16px);
+  flex: none;
+}
+
+.ckeys__buffer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+
+  background: #ffffff;
+  border: 4px solid var(--color-ink);
+  border-radius: clamp(14px, 2.2vh, 20px);
+  padding: clamp(8px, 1.2vh, 14px) clamp(12px, 1.6vw, 20px);
+  min-height: clamp(52px, 6.4vh, 72px);
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.1rem, 2.8vh, 1.8rem);
+  color: var(--color-ink);
+  /* Long typing scrolls sideways instead of breaking the layout. */
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.ckeys__bufferhint {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: clamp(0.85rem, 1.9vh, 1.1rem);
+  color: #5c5c6b;
+}
+
+.ckeys__close {
+  flex: none;
+}
+
+.ckeys__rows {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(5px, 1vh, 10px);
+}
+
+.ckeys__row {
+  flex: 1;
+  display: flex;
+  gap: clamp(4px, 0.7vw, 9px);
+  justify-content: center;
+}
+
+.ckeys__key {
+  flex: 1;
+  min-width: 0;
+  /* Comfortably past the 44px minimum touch target. */
+  min-height: clamp(44px, 7vh, 74px);
+
+  background: #ffffff;
+  border: 3px solid var(--color-ink);
+  border-radius: clamp(8px, 1.4vh, 14px);
+  box-shadow: 0 4px 0 rgba(43, 43, 58, 0.14);
+  cursor: pointer;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(0.9rem, 2.4vh, 1.5rem);
+  color: var(--color-ink);
+
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out;
+}
+
+.ckeys__key--wide {
+  flex: 2;
+  font-size: clamp(0.8rem, 1.9vh, 1.1rem);
+}
+
+.ckeys__key--add {
+  flex: 2;
+  background: var(--color-coral);
+  font-size: clamp(0.8rem, 1.9vh, 1.1rem);
+}
+
+.ckeys__key:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 rgba(43, 43, 58, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   Placeholder dialog
+   -------------------------------------------------------------------------- */
+.cdialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+
+  background: rgba(43, 43, 58, 0.45);
+}
+
+.cdialog {
+  width: 100%;
+  max-width: 440px;
+
+  background: var(--color-cream);
+  border: 5px solid var(--color-ink);
+  border-radius: clamp(18px, 3vh, 28px);
+  box-shadow: 0 8px 0 rgba(43, 43, 58, 0.22);
+  padding: clamp(18px, 3vh, 32px);
+
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.6vh, 18px);
+  text-align: center;
+}
+
+.cdialog__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.3rem, 3.2vh, 1.9rem);
+  color: var(--color-ink);
+}
+
+.cdialog__message {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.9rem, 2vh, 1.15rem);
+  line-height: 1.45;
+  color: var(--color-ink);
+}
+
+.cdialog__close {
+  align-self: center;
+  min-width: 160px;
+  min-height: clamp(50px, 6.4vh, 68px);
+  padding: 8px 28px;
+
+  background: var(--color-coral);
+  border: 5px solid var(--color-ink);
+  border-radius: 999px;
+  box-shadow: 0 6px 0 rgba(43, 43, 58, 0.22);
+  cursor: pointer;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1rem, 2.4vh, 1.4rem);
+  color: var(--color-ink);
+}
+
+.cdialog__close:active {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 rgba(43, 43, 58, 0.2);
+}
+
+/* ==========================================================================
+   NARROW SCREENS
+
+   The menu becomes a horizontal strip along the bottom, which keeps every
+   control reachable by thumb instead of squeezing the cards.
+   ========================================================================== */
+/* ==========================================================================
+   COLUMN COUNT -- tablet first
+
+   The base value is the TABLET case (3 columns), not a desktop one scaled
+   down: this board is built for a tablet, so that is what the unqualified
+   rule describes. The breakpoints below only widen it for larger screens.
+
+   --rows is the matching row count for the 13 home-board cards, used by the
+   row-height arithmetic so the bottom row is never cut off.
+   ========================================================================== */
+.cboard__cards {
+  --cols: 3;
+}
+
+/*
+   SHORT SCREENS -- landscape tablets and laptops, under ~860px tall.
+
+   Here the height, not the width, is scarce: 13 cards over four rows will
+   not fit at a comfortably tall card. Letting the row flatten to 0.6x the
+   column width is what makes everything visible without scrolling. The card
+   is wider than tall, but it is fully on screen and the label stays large,
+   which matters more on an AAC board than a fixed proportion.
+*/
+@media (max-height: 860px) {
+  .cboard__cards {
+    --min-ratio: 0.6;
+  }
+}
+
+/*
+   Landscape tablets and small laptops: four columns.
+
+   The 1000px threshold is chosen for the SHORT-screen case rather than the
+   wide one. A 1024x768 landscape tablet has little height, so three columns
+   means five rows and the board has to scroll; four columns is four rows,
+   which fits. Width alone would have put it at three.
+*/
+@media (min-width: 1000px) {
+  .cboard__cards {
+    --cols: 4;
+  }
+}
+
+/*
+   Laptop and desktop: five columns -- the practical ceiling for an AAC board,
+   since beyond that the cards get small and the eye has too much to scan.
+
+   1300px, not 1400: a 1366x768 laptop is SHORT, so four columns means four
+   rows and the board scrolls. Five columns is three rows, and the cards come
+   out larger (235x211 rather than 295x177) as well as fully visible.
+*/
+@media (min-width: 1300px) {
+  .cboard__cards {
+    --cols: 5;
+  }
+}
+
+/* Narrow tablets in portrait and large phones. */
+@media (max-width: 700px) {
+  .cboard__cards {
+    --cols: 2;
+  }
+}
+
+@media (max-width: 620px) {
+  /* The lower row stacks, putting the toolbar under the cards as a
+     horizontal strip within thumb reach. The sentence bar still spans the
+     full width above both. */
+  .cboard__lower {
+    flex-direction: column;
+  }
+
+  .cmenu {
+    width: 100%;
+    align-self: auto;
+    flex: none;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .cmenu__btn {
+    flex: 1 1 auto;
+    min-width: clamp(64px, 20vw, 90px);
+    min-height: clamp(58px, 8vh, 82px);
+  }
+
+  /* In a horizontal strip every button shares one height, so the Keyboard
+     button's extra height would stretch the whole row. It stays prominent
+     through its fill and position instead. */
+  /* In a horizontal strip every button shares one height, so the Keyboard
+     button cannot be taller. It stays prominent through fill and position. */
+  .cmenu__btn--keyboard {
+    flex-grow: 1;
+  }
+
+
+  /* Icon-and-word buttons stack awkwardly at this size, so the sentence
+     controls drop to icon width and keep their labels underneath. */
+  .cbtn {
+    min-width: clamp(56px, 17vw, 76px);
+  }
+}
+
+/* ==========================================================================
+   REDUCED MOTION
+
+   The tap animation is the one thing removed. The press effect stays: it is
+   a direct response to a touch rather than ambient motion, and it is the
+   child's confirmation that the card registered.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .ccard--tapped {
+    animation: none;
+  }
+
+  .ccard,
+  .cbtn,
+  .cmenu__btn,
+  .ckeys__key,
+  .cfolder,
+  .cbar__back {
+    transition: none;
+  }
+
+  .cboard__cards {
+    scroll-behavior: auto;
+  }
+}
