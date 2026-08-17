@@ -51,15 +51,25 @@
  * All eight share ONE colour (CORE_COLORS below) so they read as a single
  * group, distinct from the colour-coded categories.
  */
+/*
+ * All eight share ONE colour (CORE_COLORS below) so they read as a single
+ * group, distinct from the five colour-coded categories.
+ *
+ * The emoji are chosen to match how these words are actually signed or
+ * gestured, so the picture reinforces the word rather than decorating it:
+ * pointing at yourself for "I", pointing outward for "You", open hands for
+ * "Want". They are a support for a child who cannot yet read the label --
+ * the word itself stays the primary content.
+ */
 export const BASIC_WORDS = [
-  { id: 'basic-i', label: 'I', category: 'basic', image: null, coreWord: true },
-  { id: 'basic-you', label: 'You', category: 'basic', image: null, coreWord: true },
-  { id: 'basic-want', label: 'Want', category: 'basic', image: null, coreWord: true },
-  { id: 'basic-need', label: 'Need', category: 'basic', image: null, coreWord: true },
-  { id: 'basic-more', label: 'More', category: 'basic', image: null, coreWord: true },
-  { id: 'basic-like', label: 'Like', category: 'basic', image: null, coreWord: true },
-  { id: 'basic-no', label: 'No', category: 'basic', image: null, coreWord: true },
-  { id: 'basic-yes', label: 'Yes', category: 'basic', image: null, coreWord: true },
+  { id: 'basic-i', label: 'I', category: 'basic', image: null, emoji: '🙋', coreWord: true },
+  { id: 'basic-you', label: 'You', category: 'basic', image: null, emoji: '👉', coreWord: true },
+  { id: 'basic-want', label: 'Want', category: 'basic', image: null, emoji: '🤲', coreWord: true },
+  { id: 'basic-need', label: 'Need', category: 'basic', image: null, emoji: '🙏', coreWord: true },
+  { id: 'basic-more', label: 'More', category: 'basic', image: null, emoji: '➕', coreWord: true },
+  { id: 'basic-like', label: 'Like', category: 'basic', image: null, emoji: '👍', coreWord: true },
+  { id: 'basic-no', label: 'No', category: 'basic', image: null, emoji: '🚫', coreWord: true },
+  { id: 'basic-yes', label: 'Yes', category: 'basic', image: null, emoji: '✅', coreWord: true },
 ]
 
 /* -------------------------------------------------------------------------
@@ -100,13 +110,19 @@ export const CATEGORIES = [
 ]
 
 /*
- * One NEUTRAL warm grey for all eight basic words.
+ * ONE violet for all eight basic words.
  *
- * Deliberately colourless: the five categories own the colours, so a neutral
- * card says "this is not a category" without competing with them, and the
- * eight read as a single group.
+ * A neutral grey was tried first and was the wrong call: at deltaE 5.3 from
+ * the cream page it barely registered as a card at all, while every category
+ * sits at 15-17. This violet is 23.5 from the page, so the group is
+ * unmistakable, and 12.9 from its nearest category (Actions), so it is never
+ * mistaken for one. Lightening it much further starts to collide with the
+ * Actions blue, which is why it stops here.
+ *
+ * Violet is deliberately outside the five category hues -- these words
+ * belong to no category, and the colour says so.
  */
-export const CORE_COLORS = { tint: '#eeeae3', deep: '#c4bdb2', accent: '#6b6459' }
+export const CORE_COLORS = { tint: '#e3daf9', deep: '#b49ce8', accent: '#5b3a9e' }
 
 /* Looks up a category's colours, for cards rendered outside their folder. */
 export function categoryColors(categoryId) {

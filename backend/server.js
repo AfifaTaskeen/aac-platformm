@@ -8,6 +8,8 @@ const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
+/* Google Cloud Text-to-Speech, kept in its own module -- see tts.js. */
+const tts = require("./tts");
 
 const app = express();
 
@@ -1252,6 +1254,96 @@ app.post("/api/child-profile", requireAuth, async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Something went wrong. Please try again."
+        });
+    }
+});
+
+/* ==========================================================================
+   POST /api/tts
+   Turns a word or short sentence into spoken audio.
+
+   The browser sends { text, voice } where voice is "male" or "female" -- the
+   same two values the child profile already stores -- and gets MP3 bytes
+   back.
+
+   The frontend never sees a Google credential, a project id or even a Google
+   voice name: it names one of two preferences and receives audio. All
+   authentication happens here, from the environment.
+
+   Deliberately NOT behind requireAuth for now: this first version is for
+   verifying the Google integration works, and the test commands need to run
+   without a session cookie. Add requireAuth when it is wired to the board.
+   ========================================================================== */
+app.post("/api/tts", async (req, res) => {
+    try {
+        /*
+         * 1. Validate the input FIRST. A malformed request is a client error
+         * whatever the server's configuration happens to be.
+         */
+        const { text, voice } = req.body || {};
+
+        if (typeof text !== "string" || !text.trim()) {
+            return res.status(400).json({
+                success: false,
+                field: "text",
+                message: "Please provide some text to speak."
+            });
+        }
+
+        if (text.trim().length > tts.MAX_TEXT_LENGTH) {
+            return res.status(400).json({
+                success: false,
+                field: "text",
+                message: `Text must be ${tts.MAX_TEXT_LENGTH} characters or fewer.`
+            });
+        }
+
+        if (!tts.ALLOWED_VOICES.includes(voice)) {
+            return res.status(400).json({
+                success: false,
+                field: "voice",
+                message: `Voice must be one of: ${tts.ALLOWED_VOICES.join(", ")}.`
+            });
+        }
+
+        // 2. Only then, check this server can actually reach Google.
+        if (!tts.isConfigured()) {
+            console.log(
+                "Text-to-speech is not configured: set GOOGLE_APPLICATION_CREDENTIALS " +
+                "in backend/.env to the path of your service-account JSON file."
+            );
+            return res.status(503).json({
+                success: false,
+                message: "Speech service is not configured on the server yet."
+            });
+        }
+
+        // 3. Synthesize and return the audio itself, not a JSON wrapper.
+        const audio = await tts.synthesize(text.trim(), voice);
+
+        res.set({
+            "Content-Type": "audio/mpeg",
+            "Content-Length": audio.length,
+            /*
+             * No caching yet, by design -- this first version proves the
+             * integration works. Caching comes later.
+             */
+            "Cache-Control": "no-store"
+        });
+
+        return res.status(200).send(audio);
+
+    } catch (error) {
+        /*
+         * The real reason goes to the server log, where the developer can
+         * see it. The client gets a plain message: a Google error can carry
+         * a project id or key path, and none of that belongs in a response.
+         */
+        console.log("Text-to-speech failed:", error.message);
+
+        return res.status(502).json({
+            success: false,
+            message: "Could not generate speech just now. Please try again."
         });
     }
 });

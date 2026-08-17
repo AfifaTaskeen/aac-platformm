@@ -3,6 +3,18 @@ backend/.env
 frontend/.env.local
 frontend/.env
 
+# Google Cloud service-account keys. A leaked key lets anyone bill your
+# project, so these must never be committed -- keep them outside the repo if
+# you can, and these patterns catch them if you do not.
+*.json.key
+gcp-*.json
+*service-account*.json
+*-credentials.json
+backend/keys/
+
+# Audio produced by test-tts.js
+backend/tts-test-*.mp3
+
 # Dependencies
 backend/node_modules/
 frontend/node_modules/

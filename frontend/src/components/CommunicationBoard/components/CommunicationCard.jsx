@@ -44,7 +44,7 @@ function CommunicationCard({ card, onSelect, isCore = false }) {
    */
   const colors = isCore ? CORE_COLORS : categoryColors(card.category)
   const style = colors
-    ? { '--tint': colors.tint, '--deep': colors.deep, '--accent': colors.accent }
+    ? { '--tint': colors.tint, '--deep': colors.deep }
     : undefined
 
   return (

@@ -134,11 +134,41 @@
    button no longer looks raised and pressable. It reads correctly in
    greyscale.
 */
-.cbar__back:disabled,
-.cbtn:disabled,
-.cmenu__btn:disabled,
+/*
+   Keyboard keys fade to grey when disabled. Sidebar buttons do not -- see
+   below.
+*/
 .ckeys__key:disabled {
   background: #ece7de;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/*
+   Sidebar buttons KEEP their colour when disabled, like the top-bar four.
+
+   This matters most for Up and Down: since the grid was fixed to fit the
+   screen, there is usually nothing to scroll, so they are disabled most of
+   the time. Draining them to grey would mean their colour was almost never
+   seen. They lose only the drop shadow, so they stop looking raised.
+*/
+.cmenu__btn:disabled {
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/*
+   The back arrow, Speak, Delete and Clear KEEP their colours at all times,
+   including before the child has tapped anything -- which is when the board
+   first opens and these four are the only controls on screen.
+
+   Draining them to grey made the whole top bar look switched off. They now
+   change only in weight: the drop shadow goes, so they no longer look raised
+   and pressable, and the cursor says the control is unavailable. Colour,
+   border and icon stay exactly as they are.
+*/
+.cbar__back:disabled,
+.cbtn:disabled {
   box-shadow: none;
   cursor: not-allowed;
 }
@@ -159,7 +189,9 @@
 
 /* The sidebar and keyboard keep the softer grey when disabled: those are
    secondary controls, and Up/Down being obviously inert is useful. */
-.cmenu__btn:disabled,
+/* Keyboard keys dim their letter when disabled. Sidebar buttons keep their
+   dark icon, so the Up/Down arrows stay black whether or not there is
+   anything to scroll. */
 .ckeys__key:disabled {
   color: #5a564f;
 }
@@ -517,13 +549,15 @@
   border: 5px solid var(--color-ink);
   border-radius: clamp(16px, 2.6vh, 24px);
   /*
-     The category accent as a band just inside the dark border -- an inset
-     ring, so the colour is unmistakable without weakening the black outline
-     that gives the card its definition. The second shadow is the usual
-     offset drop.
+     Just the offset drop shadow.
+
+     A saturated inset ring in the category colour used to sit here too. It
+     was removed: 4px of hard colour inside a 5px dark border gave every card
+     9px of busy edge, and across thirteen cards that read as noise rather
+     than as information. The card's FILL already says which category it
+     belongs to, so the ring was repeating what the colour had already said.
   */
-  box-shadow: inset 0 0 0 4px var(--accent, transparent),
-    0 6px 0 rgba(43, 43, 58, 0.16);
+  box-shadow: 0 6px 0 rgba(43, 43, 58, 0.16);
   cursor: pointer;
 
   transition: background-color 120ms ease-out, transform 120ms ease-out,
@@ -538,9 +572,7 @@
 .ccard:active {
   background: var(--deep, #f0ece5);
   transform: translateY(4px);
-  /* Keeps the accent ring while shrinking the drop shadow. */
-  box-shadow: inset 0 0 0 4px var(--accent, transparent),
-    0 2px 0 rgba(43, 43, 58, 0.24);
+  box-shadow: 0 2px 0 rgba(43, 43, 58, 0.24);
 }
 
 /*
@@ -629,12 +661,13 @@
    All eight share one violet --tint, set inline, so they read as a single
    group rather than eight unrelated colours.
 */
-.ccard--core {
-  justify-content: center;
-}
-
+/*
+   Basic words now carry an emoji above the word, so they use the same
+   stacked layout as every other card -- no centring override, or the emoji
+   and label would fight for the middle of the card.
+*/
 .ccard--core .ccard__label {
-  font-size: clamp(1.4rem, calc(var(--rowh, 200px) * 0.24), 2.4rem);
+  font-size: clamp(1.3rem, calc(var(--rowh, 200px) * 0.22), 2.2rem);
 }
 
 /* A picture card whose image failed to load: same treatment, so the child
@@ -672,9 +705,10 @@
 .ccard--tapped {
   animation: ccard-pop 260ms ease-out;
   background: var(--deep, var(--color-cream-warm));
+  /* The coral rim is a momentary flash on tap, not a permanent edge, so it
+     does not add to the standing visual noise. */
   border-color: var(--color-coral);
-  box-shadow: inset 0 0 0 4px var(--accent, transparent),
-    0 6px 0 rgba(255, 111, 94, 0.35);
+  box-shadow: 0 6px 0 rgba(255, 111, 94, 0.35);
 }
 
 /* --------------------------------------------------------------------------
@@ -698,9 +732,10 @@
 
 /* A folder has no photograph competing for room, so its emoji can be
    considerably larger than the fallback emoji on a word card. */
-.cfolder .ccard__emoji {
-  /* A folder has no photograph competing for room, so its emoji takes a
-     larger share of the card than a word card's fallback does. */
+/* Folders and basic words have no photograph competing for room, so their
+   emoji take a larger share of the card than a picture card's fallback. */
+.cfolder .ccard__emoji,
+.ccard--core .ccard__emoji {
   font-size: clamp(2rem, calc(var(--rowh, 200px) * 0.48), 4.6rem);
 }
 
@@ -792,14 +827,25 @@
 
 /* Up green, Down yellow: different colours, so the pair is told apart by
    more than the arrow direction alone. */
+/*
+   Up and Down: stronger fills than the rest of the strip, and a near-black
+   arrow rather than the softer ink used elsewhere.
+
+   These two are pressed constantly while reading a long board, so they need
+   to be found without looking. The teal/amber pair also reads as a matched
+   set -- one colour family for "move the cards" -- while staying clear of
+   the category colours used by the cards themselves.
+*/
 .cmenu__btn--up {
-  background: #dff5d3;
-  --deep: #a3d495;
+  background: #a7e3d4;
+  --deep: #5cbfa8;
+  color: var(--color-edge);
 }
 
 .cmenu__btn--down {
-  background: #fff2c9;
-  --deep: #f5cf57;
+  background: #ffdf9e;
+  --deep: #f0b93c;
+  color: var(--color-edge);
 }
 
 /* Orange, now that Down has taken the yellow. */

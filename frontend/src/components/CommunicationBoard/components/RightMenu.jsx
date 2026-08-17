@@ -84,12 +84,15 @@ function RightMenu({
         disabled={!canScrollUp}
         aria-label="Scroll cards up"
       >
+        {/* A shaft as well as the head: it reads as an arrow rather than a
+            decorative chevron, and the thicker stroke makes it carry at a
+            glance. */}
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path
-            d="M6 15l6-6 6 6"
+            d="M12 20V5M12 5l-6 6M12 5l6 6"
             fill="none"
             stroke="currentColor"
-            strokeWidth="3"
+            strokeWidth="3.4"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
@@ -106,10 +109,10 @@ function RightMenu({
       >
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path
-            d="M6 9l6 6 6-6"
+            d="M12 4v15M12 19l-6-6M12 19l6-6"
             fill="none"
             stroke="currentColor"
-            strokeWidth="3"
+            strokeWidth="3.4"
             strokeLinecap="round"
             strokeLinejoin="round"
           />

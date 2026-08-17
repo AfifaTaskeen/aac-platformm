@@ -116,8 +116,19 @@ function CommunicationBoard({ childProfile }) {
     return { '--colw': minCardWidth, '--rows': rowsFor(cardCount) }
   }
 
-  /* Adds a card's word to the sentence. */
+  /*
+   * Tapping a card does two things: it speaks that single word straight
+   * away, and it appends the card to the sentence.
+   *
+   * The immediate speech is the feedback that confirms the tap -- the child
+   * hears what they chose without waiting to press Speak. The Speak button
+   * still reads the whole sentence; this is one word, not a replacement.
+   *
+   * It uses the same speak() helper and the same saved voice preference, so
+   * there is only ever one speech path in the app.
+   */
   function handleSelectCard(card) {
+    speak(card.label, voicePreference)
     setSentence((current) => [...current, card])
   }
 
@@ -264,11 +275,7 @@ function CommunicationBoard({ childProfile }) {
              */
             className="ccard ccard--tinted cfolder"
             key={category.id}
-            style={{
-              '--tint': category.tint,
-              '--deep': category.deep,
-              '--accent': category.accent,
-            }}
+            style={{ '--tint': category.tint, '--deep': category.deep }}
             onClick={() => openFolder(category.id)}
             aria-label={`Open ${category.label} folder`}
           >
