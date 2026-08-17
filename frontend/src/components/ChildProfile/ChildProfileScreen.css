@@ -1,0 +1,328 @@
+/* ==========================================================================
+   Child profile screen
+
+   Only what is genuinely NEW here: the option buttons and the grid previews.
+   Everything else -- background, glow, panel, headings, text field, primary
+   button, status line -- is reused from AccountScreen.css, which is why this
+   screen looks like the same application rather than a new one.
+
+   Sizing follows the same approach as the rest of the app: clamp() with `vh`
+   for vertical measurements, so the form tightens on a short screen instead of
+   overflowing.
+   ========================================================================== */
+
+/* ==========================================================================
+   LAYOUT -- filling the screen instead of floating in it
+
+   Every selector in this block starts with `.account--profile`, so it applies
+   ONLY to this screen. The account, forgot-password and reset screens share
+   the same stylesheet and are deliberately left exactly as they were.
+
+   The narrow look came from two inherited rules:
+     .account__panel            max-width: 520px
+     .account__panel--signin    re-pins it to 520px on short/wide screens
+
+   520px is right for a 4-field account form. This screen is wider content --
+   three rows of side-by-side options -- so it sets its own width below.
+   ========================================================================== */
+
+/*
+   The page fills the viewport and centres its content. `min-height: 100dvh`
+   is inherited from `.account`; dvh (not vh) is what keeps this correct on a
+   tablet where the browser toolbar slides away.
+*/
+.account--profile {
+  /* Slightly tighter side padding than the account screens: the content is
+     wider here, so it needs less gutter to stay clear of the edge. */
+  padding: clamp(14px, 2vh, 32px) clamp(16px, 3vmin, 40px);
+}
+
+/*
+   THE VERTICAL STACK
+
+   Each question sits on its own row, in the order Child name -> Gender ->
+   Voice -> Grid size. A single column is the whole point: the hierarchy has
+   to be obvious, and side-by-side questions read as one confusing row rather
+   than four clear steps.
+*/
+.account--profile .profile__groups {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2.2vh, 26px);
+}
+
+/*
+   One comfortable measure shared by every row -- the input, all three option
+   groups and the button line up on the same left and right edges. That shared
+   edge is what makes the stack read as one form instead of stacked fragments.
+
+   The PAGE still fills the viewport (.account is min-height:100dvh with the
+   cream background); only this inner column is measured. Full-bleed inputs on
+   a 1920px monitor would be far harder to use, not better.
+*/
+.account--profile .account__panel--profile {
+  width: 100%;
+  max-width: min(94vw, 640px);
+  padding-inline: clamp(4px, 2vmin, 20px);
+}
+
+/* The name field spans that same measure. */
+.account--profile .account__fields {
+  width: 100%;
+}
+
+/*
+   Save & Continue is deliberately NOT full width: a comfortable button that
+   sits under the form reads as the end of the sequence. It is centred so it
+   belongs to the column rather than hanging off one edge.
+*/
+.account--profile .account__primary {
+  width: auto;
+  min-width: clamp(200px, 46%, 300px);
+  align-self: center;
+  padding-inline: clamp(28px, 5vw, 48px);
+  margin-top: clamp(4px, 1vh, 12px);
+}
+
+/*
+   The disabled state, shown until the required answers are given.
+
+   Neutral and light rather than coral, so the eye is not drawn to a button
+   that cannot be pressed yet. Three signals again, not colour alone: the fill
+   flattens, the offset shadow disappears (it no longer looks raised and
+   pressable), and the real disabled attribute makes a screen reader announce
+   it as unavailable.
+*/
+.account--profile .account__primary:disabled {
+  background: #f0ece5;
+  border-color: #b9b4ab;
+  color: #6f6a63;
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.account--profile .account__form {
+  gap: clamp(12px, 1.8vh, 22px);
+}
+
+/* ==========================================================================
+   SHORT SCREENS -- laptop and landscape tablet
+
+   Height is the scarce resource here. The column widens slightly and the
+   vertical rhythm tightens, so the whole stack still clears a 1366x768 laptop
+   without scrolling.
+   ========================================================================== */
+@media (max-height: 900px) and (min-aspect-ratio: 1 / 1) {
+  .account--profile .account__panel--profile {
+    max-width: min(94vw, 680px);
+  }
+
+  .account--profile .account__intro {
+    gap: 2px;
+  }
+
+  .account--profile .profile__groups {
+    gap: clamp(10px, 1.6vh, 18px);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   A labelled group of choices (Gender, Voice, Grid size)
+   -------------------------------------------------------------------------- */
+.pickgroup {
+  /* <fieldset> arrives with a browser border and padding; clear them. */
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 0.9vh, 10px);
+}
+
+/* Matches .field__label exactly, so a question reads like a field label. */
+.pickgroup__legend {
+  padding: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(0.95rem, 1.85vh, 1.2rem);
+  color: var(--color-ink);
+  line-height: 1.25;
+}
+
+.pickgroup__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(8px, 1.2vh, 14px);
+}
+
+/* Grid previews are wider, so they get room to wrap as whole units. */
+.pickgroup__options--grids {
+  gap: clamp(10px, 1.4vh, 16px);
+}
+
+/*
+   Quiet guidance under a group of options. Same treatment as the password
+   helper on the account screen -- smaller and softer than a label, so it reads
+   as a note rather than competing with the question above it.
+
+   #5C5C6B is 6.2:1 on cream: lower emphasis, never lower legibility.
+*/
+.pickgroup__help {
+  margin: 2px 0 0;
+
+  font-family: var(--font-body);
+  font-size: clamp(0.75rem, 1.5vh, 0.9rem);
+  line-height: 1.35;
+  color: #5c5c6b;
+}
+
+.pickgroup__error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 0;
+
+  font-family: var(--font-body);
+  font-size: clamp(0.8rem, 1.7vh, 1rem);
+  line-height: 1.3;
+  color: var(--color-ink);
+}
+
+/* --------------------------------------------------------------------------
+   A single choice button
+
+   Same visual language as the fields and buttons: chunky ink border, generous
+   radius, flat offset shadow, physical press. Unselected is white like an
+   input; selected fills with coral like the primary button.
+   -------------------------------------------------------------------------- */
+.pickbtn {
+  flex: 1 1 auto;
+  min-width: clamp(88px, 26%, 150px);
+  min-height: clamp(50px, 6vh, 68px);
+  padding: 8px clamp(12px, 2vh, 20px);
+
+  background: #ffffff;
+  border: 4px solid var(--color-ink);
+  border-radius: 999px;
+  box-shadow: 0 5px 0 rgba(43, 43, 58, 0.14);
+  cursor: pointer;
+
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(0.95rem, 2vh, 1.2rem);
+  color: var(--color-ink);
+
+  transition: background-color 140ms ease-out, transform 90ms ease-out,
+    box-shadow 90ms ease-out;
+}
+
+/*
+   Selected state.
+
+   Carried by THREE signals, not colour alone: the fill changes, the shadow
+   shrinks so the button sits lower (visibly "pushed in"), and aria-pressed
+   announces it to a screen reader. It still reads correctly in greyscale.
+*/
+.pickbtn--on {
+  background: var(--color-coral);
+  box-shadow: 0 2px 0 rgba(43, 43, 58, 0.28);
+  transform: translateY(3px);
+}
+
+.pickbtn:active {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 rgba(43, 43, 58, 0.2);
+}
+
+/* --------------------------------------------------------------------------
+   Grid size choice: a small preview plus its label
+   -------------------------------------------------------------------------- */
+.gridpick {
+  flex: 1 1 auto;
+  min-width: clamp(84px, 28%, 132px);
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(5px, 0.8vh, 9px);
+
+  padding: clamp(10px, 1.5vh, 16px) clamp(8px, 1.2vh, 14px);
+
+  background: #ffffff;
+  border: 4px solid var(--color-ink);
+  /* Squarer than the pills, echoing the shape of the grid it describes. */
+  border-radius: clamp(14px, 2.2vh, 20px);
+  box-shadow: 0 5px 0 rgba(43, 43, 58, 0.14);
+  cursor: pointer;
+
+  transition: background-color 140ms ease-out, transform 90ms ease-out,
+    box-shadow 90ms ease-out;
+}
+
+.gridpick--on {
+  background: var(--color-coral);
+  box-shadow: 0 2px 0 rgba(43, 43, 58, 0.28);
+  transform: translateY(3px);
+}
+
+.gridpick:active {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 rgba(43, 43, 58, 0.2);
+}
+
+/*
+   The preview itself. A square block of cells, kept deliberately small so
+   three of them sit in a row without crowding the form.
+*/
+.gridpick__preview {
+  display: grid;
+  gap: 3px;
+
+  width: clamp(38px, 5.4vh, 52px);
+  aspect-ratio: 1;
+}
+
+.gridpick__cell {
+  background: var(--color-cream);
+  border: 2px solid var(--color-ink);
+  border-radius: 3px;
+}
+
+/* On a selected card the cells stay cream against the coral fill, so the
+   preview remains legible rather than blending into the background. */
+.gridpick--on .gridpick__cell {
+  background: #ffffff;
+}
+
+.gridpick__label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(0.85rem, 1.8vh, 1.1rem);
+  color: var(--color-ink);
+  line-height: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Narrow screens: stack the options rather than squeezing them
+   -------------------------------------------------------------------------- */
+@media (max-width: 420px) {
+  .pickbtn {
+    flex: 1 1 100%;
+  }
+
+  /* The three grid cards still fit side by side; they only need less padding. */
+  .gridpick {
+    min-width: 0;
+    padding: 10px 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pickbtn,
+  .gridpick {
+    transition: none;
+  }
+}

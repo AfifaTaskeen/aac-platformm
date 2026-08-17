@@ -1,0 +1,11 @@
+# Secrets -- never commit these
+backend/.env
+frontend/.env.local
+frontend/.env
+
+# Dependencies
+backend/node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/

@@ -308,6 +308,47 @@
 }
 
 /* --------------------------------------------------------------------------
+   Password field + its helper text
+
+   These two are wrapped in one element so the field grid treats them as a
+   SINGLE cell. Without the wrapper the helper text became its own grid cell
+   and landed in the column beside the password field instead of below it.
+
+   min-width: 0 is needed on a grid child that contains text: without it the
+   cell refuses to shrink below its longest unbreakable line and can push the
+   column wider than its share.
+   -------------------------------------------------------------------------- */
+.account__password-group {
+  display: flex;
+  flex-direction: column;
+  /* Small, deliberate gap: close enough that the note clearly belongs to the
+     field above it, while the larger grid gap separates it from Confirm
+     password below. */
+  gap: clamp(4px, 0.6vh, 7px);
+  min-width: 0;
+}
+
+/*
+   One quiet line under the Password input, sharing its left edge. Deliberately
+   smaller and softer than a label so it reads as guidance rather than
+   competing with the fields.
+
+   #5C5C6B is 6.2:1 on white -- past the 4.5:1 minimum, so "subtle" here means
+   lower emphasis, never lower legibility.
+
+   A wrapped second line stays flush left with the first, because the paragraph
+   is a plain block starting at the group's left edge.
+*/
+.account__password-help {
+  margin: 0;
+
+  font-family: var(--font-body);
+  font-size: clamp(0.75rem, 1.5vh, 0.9rem);
+  line-height: 1.35;
+  color: #5c5c6b;
+}
+
+/* --------------------------------------------------------------------------
    Buttons
    -------------------------------------------------------------------------- */
 .account__forgot-row {
@@ -377,6 +418,22 @@
   color: var(--color-ink);
 
   transition: transform 90ms ease-out, box-shadow 90ms ease-out;
+}
+
+/*
+   Holds the real Google-rendered button. It must stay in the layout (Google
+   will not operate inside display:none or visibility:hidden), so it is clipped
+   to a single pixel instead. The user never sees it; they press the Buddy Talk
+   button above, which forwards the click here.
+*/
+.account__google-host {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  pointer-events: none;
+  opacity: 0;
 }
 
 /* The Google mark keeps its own four brand colours -- recolouring it would

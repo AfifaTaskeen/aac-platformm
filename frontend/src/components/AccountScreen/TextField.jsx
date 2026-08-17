@@ -38,6 +38,9 @@ function TextField({
   onBlur,
   error = '',
   hint = '',
+  // Optional id of separate help text sitting outside this component, so a
+  // screen reader announces it when the field is focused.
+  describedBy = '',
   autoComplete,
   canReveal = false,
   isRevealed = false,
@@ -82,9 +85,11 @@ function TextField({
           /* Tells assistive technology this field is wrong, and points it at
              the message that explains why. */
           aria-invalid={hasError}
-          /* Point at the error when there is one, otherwise at the hint, so
-             a screen reader hears the password rule before typing. */
-          aria-describedby={hasError ? errorId : hint ? hintId : undefined}
+          /* Point at the error when there is one, otherwise at the help text
+             or hint, so a screen reader hears the rule before typing. */
+          aria-describedby={
+            hasError ? errorId : describedBy || (hint ? hintId : undefined)
+          }
           /* Tablet keyboards like to capitalise the first letter, which
              silently breaks email addresses. */
           autoCapitalize={type === 'email' ? 'none' : 'sentences'}
