@@ -43,6 +43,13 @@ function CommunicationBoard({ childProfile }) {
    */
   const [openCategory, setOpenCategory] = useState(null)
 
+  /*
+   * True while a tapped card is flying to the centre and back. The card
+   * area drops its clipping for that moment, so the card is not sliced off
+   * as it crosses the board.
+   */
+  const [isPopping, setIsPopping] = useState(false)
+
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [dialog, setDialog] = useState(null)
@@ -117,18 +124,16 @@ function CommunicationBoard({ childProfile }) {
   }
 
   /*
-   * Tapping a card does two things: it speaks that single word straight
-   * away, and it appends the card to the sentence.
+   * Tapping a card appends it to the sentence.
    *
-   * The immediate speech is the feedback that confirms the tap -- the child
-   * hears what they chose without waiting to press Speak. The Speak button
-   * still reads the whole sentence; this is one word, not a replacement.
+   * The updater form -- (current) => [...current, card] -- rather than
+   * [...sentence, card] is what makes rapid tapping safe: each update is
+   * applied to the freshest state, so two taps in the same frame cannot
+   * both read the same stale array and drop one of the words.
    *
-   * It uses the same speak() helper and the same saved voice preference, so
-   * there is only ever one speech path in the app.
+   * Speech is deliberately NOT here yet; that is a later feature.
    */
   function handleSelectCard(card) {
-    speak(card.label, voicePreference)
     setSentence((current) => [...current, card])
   }
 
@@ -245,7 +250,12 @@ function CommunicationBoard({ childProfile }) {
       return (
         <div className="cboard__grid" style={gridStyleFor(cardsInCategory(openCategory).length)}>
           {cardsInCategory(openCategory).map((card) => (
-            <CommunicationCard key={card.id} card={card} onSelect={handleSelectCard} />
+            <CommunicationCard
+              key={card.id}
+              card={card}
+              onSelect={handleSelectCard}
+              onPopChange={setIsPopping}
+            />
           ))}
         </div>
       )
@@ -261,7 +271,13 @@ function CommunicationBoard({ childProfile }) {
     return (
       <div className="cboard__grid" style={gridStyleFor(BASIC_WORDS.length + CATEGORIES.length)}>
         {BASIC_WORDS.map((card) => (
-          <CommunicationCard key={card.id} card={card} onSelect={handleSelectCard} isCore />
+          <CommunicationCard
+            key={card.id}
+            card={card}
+            onSelect={handleSelectCard}
+            onPopChange={setIsPopping}
+            isCore
+          />
         ))}
 
         {CATEGORIES.map((category) => (
@@ -321,7 +337,10 @@ function CommunicationBoard({ childProfile }) {
             The keyboard renders in here too, which is why it can never cover
             the sentence bar or the toolbar.
           */}
-          <div className="cboard__cards" ref={cardAreaRef}>
+          <div
+            className={`cboard__cards ${isPopping ? 'cboard__cards--popping' : ''}`}
+            ref={cardAreaRef}
+          >
             {renderCardArea()}
           </div>
         </div>

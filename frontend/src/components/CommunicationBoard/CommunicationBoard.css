@@ -352,8 +352,52 @@
 .cboard__cards {
   flex: 1;
   min-height: 0;
+
   overflow-y: auto;
   overflow-x: hidden;
+
+  /*
+     A tapped card grows to 1.6 and spills roughly 65px past its own cell.
+     The container clips at its PADDING box, so a card in the first or last
+     column was being sliced through mid-pop.
+
+     Padding moves that clip edge outward, and the equal negative margin
+     pulls the whole block back so the grid still sits exactly where it did.
+     Net horizontal position: unchanged; net effect: the enlarged card has
+     room to paint.
+
+     The amount scales with the VIEWPORT, not a fixed pixel figure. A card
+     spills (1.6 - 1) / 2 = 0.3 of its own width, and card width runs from
+     ~207px on a portrait tablet to ~342px on a desktop -- so any fixed value
+     clips somewhere: 70px cut the laptops, 100px still cut the desktop.
+
+     12vw tracks that growth, because card width is itself a fraction of the
+     viewport. It is deliberately not derived from --actual-colw: that
+     variable is defined on this same element from its own width, and feeding
+     it back into this element's padding would be circular.
+  */
+  --pop-room: clamp(70px, 12vw, 180px);
+  padding-inline: var(--pop-room);
+  margin-inline: calc(var(--pop-room) * -1);
+}
+
+/*
+   WHILE A CARD IS FLYING TO THE CENTRE.
+
+   The tapped card travels up to ~485px from a far corner, which no amount of
+   padding can accommodate -- and the container clips vertically too. So the
+   board drops its clipping entirely for the 560ms of the animation.
+
+   `visible` on both axes is required: setting only one leaves the other
+   computing to auto, which still clips. Scrolling is suspended for that
+   moment, which is unnoticeable and stops the scroll position jumping while
+   a card is out of place.
+
+   The class is set by CommunicationBoard.jsx and removed when the animation
+   finishes, so the normal scrolling behaviour returns immediately.
+*/
+.cboard__cards--popping {
+  overflow: visible;
 
   /*
      Room for the last row's shadow, so it is not clipped mid-scroll.
@@ -362,7 +406,8 @@
      the last row would overflow by exactly that much.
   */
   box-sizing: border-box;
-  padding: 2px 2px 10px;
+  padding-top: 2px;
+  padding-bottom: 10px;
 
   /* Kinetic scrolling on touch, and snappier stops. */
   -webkit-overflow-scrolling: touch;
@@ -504,6 +549,13 @@
   gap: clamp(4px, 0.8vh, 10px);
 
   /*
+     Stated explicitly rather than left to the default: the tap animation
+     scales the card, and the origin is what guarantees it grows about its
+     own centre so that centre point never moves.
+  */
+  transform-origin: center center;
+
+  /*
      Standard card size, set for TABLET use -- the device this is built for.
 
      aspect-ratio keeps every card the same SHAPE whatever its word length,
@@ -569,9 +621,17 @@
    own shadow. Both the colour AND the movement change, so the state is never
    carried by colour alone.
 */
+/*
+   While the finger is DOWN: the card darkens and shrinks very slightly, as
+   though pressed into the page.
+
+   A scale, not a translate. The card previously sank 4px, which was movement
+   away from its position and fought the pop animation that follows. Scaling
+   keeps the card centred in its own cell throughout.
+*/
 .ccard:active {
   background: var(--deep, #f0ece5);
-  transform: translateY(4px);
+  transform: scale(0.97);
   box-shadow: 0 2px 0 rgba(43, 43, 58, 0.24);
 }
 
@@ -685,15 +745,87 @@
    Short and subtle by design -- it confirms the tap without becoming a
    distraction, and without delaying the word appearing in the sentence.
 */
+/*
+   Tap feedback: the card swells in place and settles back.
+
+   SCALE ONLY -- no translate. An earlier version added translateY(-4px),
+   which lifted the card towards the sentence bar and read as the card
+   travelling there. A pure scale grows the card around its own centre, so it
+   never leaves its grid cell.
+
+   Because scale is a transform it is painted, not laid out: the cell keeps
+   its exact size and the surrounding cards never move. The card returns to
+   scale(1), which is its natural size, so the end state is identical to the
+   start.
+*/
 @keyframes ccard-pop {
+  /*
+     EASING IS PER-SEGMENT, declared inside the keyframes.
+
+     A single cubic-bezier on the shorthand is applied to EVERY segment
+     separately, and an aggressive curve then reaches most of its travel in
+     the first few milliseconds -- which is what made an earlier version snap
+     rather than move. Each stop below carries its own curve instead, and the
+     shorthand is linear so it does not override them.
+
+     --dx / --dy are measured in JS at tap time: the distance from this
+     card's centre to the centre of the card area. Every card therefore
+     travels its own distance, and a card already near the middle barely
+     moves.
+
+     translate comes BEFORE scale in the transform list, so the card is moved
+     first and then grown about its new position.
+  */
   0% {
-    transform: scale(1);
+    transform: translate(0, 0) scale(1);
+    box-shadow: 0 6px 0 rgba(43, 43, 58, 0.16);
+    filter: brightness(1);
+    animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1);
   }
-  45% {
-    transform: scale(1.06) translateY(-4px);
+
+  /* A third of the way across, already growing. */
+  22% {
+    transform: translate(calc(var(--dx, 0px) * 0.38), calc(var(--dy, 0px) * 0.38))
+      scale(1.22);
+    box-shadow: 0 14px 28px rgba(43, 43, 58, 0.3);
+    filter: brightness(1.04);
+    animation-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
   }
+
+  /* Arrived at the centre, at full size. */
+  42% {
+    transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(1.55);
+    box-shadow: 0 24px 48px rgba(43, 43, 58, 0.44);
+    filter: brightness(1.07);
+    animation-timing-function: linear;
+  }
+
+  /* Holds in the middle so the card is genuinely read. */
+  62% {
+    transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(1.55);
+    box-shadow: 0 24px 48px rgba(43, 43, 58, 0.44);
+    filter: brightness(1.07);
+    animation-timing-function: cubic-bezier(0.4, 0, 0.4, 1);
+  }
+
+  /* On the way home, shrinking as it goes. */
+  82% {
+    transform: translate(calc(var(--dx, 0px) * 0.34), calc(var(--dy, 0px) * 0.34))
+      scale(1.2);
+    box-shadow: 0 12px 24px rgba(43, 43, 58, 0.26);
+    filter: brightness(1.03);
+    animation-timing-function: cubic-bezier(0.3, 0, 0.2, 1);
+  }
+
+  /*
+     Back to exactly the resting state: zero translation, scale 1, the same
+     shadow and brightness as 0%. The card ends precisely in its own grid
+     cell, whatever distance it travelled.
+  */
   100% {
-    transform: scale(1);
+    transform: translate(0, 0) scale(1);
+    box-shadow: 0 6px 0 rgba(43, 43, 58, 0.16);
+    filter: brightness(1);
   }
 }
 
@@ -703,12 +835,48 @@
    if the press itself was brief.
 */
 .ccard--tapped {
-  animation: ccard-pop 260ms ease-out;
+  /*
+     480ms: the card grows, HOLDS at full size, then shrinks back, and the
+     word follows. Long enough for a child to see the enlarged card properly;
+     short enough that building a sentence does not feel slow. The component
+     listens for THIS animation ending, so the timing stays in step
+     automatically if the duration is ever changed here.
+
+     `linear` HERE is deliberate and is not the same as a linear animation.
+     Each keyframe declares its own animation-timing-function, and this
+     shorthand value is only the default for any segment that does not. A
+     curve here would be re-applied to every segment separately, which is
+     exactly what made the motion snap.
+
+     1000ms total: grow (0-42%), hold (42-62%), return (62-100%).
+
+     A full second, so the travel to the centre is unhurried and a child has
+     time to follow the card with their eyes. The percentages are unchanged,
+     so every phase stretches proportionally -- 420ms out, 200ms holding in
+     the middle, 380ms back.
+
+     This is about the practical ceiling: the word only reaches the sentence
+     bar when the animation ends, so a longer hold would start to feel like a
+     lag while building a sentence.
+
+     No box-shadow of its own -- the keyframes animate it, and a static value
+     here would override them and flatten the depth effect.
+  */
+  animation: ccard-pop 1000ms linear;
   background: var(--deep, var(--color-cream-warm));
   /* The coral rim is a momentary flash on tap, not a permanent edge, so it
      does not add to the standing visual noise. */
   border-color: var(--color-coral);
-  box-shadow: 0 6px 0 rgba(255, 111, 94, 0.35);
+
+  /*
+     Lifts the card above its neighbours WHILE IT GROWS.
+     Grid items paint in source order, so without this a card to the right or
+     below would draw over the enlarged edges and clip the effect. Both
+     properties apply only for the 360ms the class is present, so the card's
+     normal stacking is unchanged.
+  */
+  position: relative;
+  z-index: 3;
 }
 
 /* --------------------------------------------------------------------------
@@ -1199,8 +1367,30 @@
    child's confirmation that the card registered.
    ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
+  /*
+     NOT `animation: none`.
+
+     The word is added when this animation ends, so removing it entirely
+     would mean the animationend event never fires and a child using reduced
+     motion could never build a sentence at all.
+
+     Instead the animation still runs, but almost instantly and without the
+     scaling: a brief colour flash confirms the tap, the event still fires,
+     and there is effectively no motion.
+  */
   .ccard--tapped {
-    animation: none;
+    animation: ccard-pop-still 120ms linear;
+  }
+
+  /* Motion-free equivalent: no scale at all, just enough duration for the
+     animationend event that adds the word. */
+  @keyframes ccard-pop-still {
+    from {
+      transform: none;
+    }
+    to {
+      transform: none;
+    }
   }
 
   .ccard,
