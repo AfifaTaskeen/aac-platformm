@@ -11,6 +11,9 @@ import {
   saveGridSize,
   loadTextSize,
   saveTextSize,
+  loadTheme,
+  saveTheme,
+  applyTheme,
 } from './boardSettings'
 import { BASIC_WORDS, CATEGORIES, cardsInCategory } from './cardData'
 import { speak, playAlert } from './speech'
@@ -67,6 +70,13 @@ function CommunicationBoard({ childProfile }) {
 
   /* The Text Size setting -- the size of the words on cards, nothing else. */
   const [textSizeId, setTextSizeId] = useState(loadTextSize)
+
+  /* Light or dark. Applied to <html>, so it covers every screen. */
+  const [themeId, setThemeId] = useState(loadTheme)
+
+  useEffect(() => {
+    applyTheme(themeId)
+  }, [themeId])
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
@@ -454,6 +464,11 @@ function CommunicationBoard({ childProfile }) {
           onSelectTextSize={(id) => {
             setTextSizeId(id)
             saveTextSize(id)
+          }}
+          theme={themeId}
+          onSelectTheme={(id) => {
+            setThemeId(id)
+            saveTheme(id)
           }}
           onClose={() => setIsSettingsOpen(false)}
         />

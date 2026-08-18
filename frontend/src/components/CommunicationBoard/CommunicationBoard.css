@@ -139,7 +139,7 @@
    below.
 */
 .ckeys__key:disabled {
-  background: #ece7de;
+  background: var(--color-cream-warm);
   box-shadow: none;
   cursor: not-allowed;
 }
@@ -193,7 +193,7 @@
    dark icon, so the Up/Down arrows stay black whether or not there is
    anything to scroll. */
 .ckeys__key:disabled {
-  color: #5a564f;
+  color: var(--color-muted-text);
 }
 
 /*
@@ -208,7 +208,7 @@
   align-items: center;
   gap: clamp(6px, 0.9vw, 12px);
 
-  background: #ffffff;
+  background: var(--color-surface);
   /* The standard ink, like the cards: this is the surface the sentence sits
      on, not one of the four controls that carry the darker black. */
   border: 5px solid var(--color-ink);
@@ -262,7 +262,7 @@
 .cbar__placeholder {
   font-family: var(--font-body);
   font-size: clamp(0.85rem, 1.9vh, 1.15rem);
-  color: #5c5c6b;
+  color: var(--color-muted-text);
 }
 
 .cbar__actions {
@@ -292,7 +292,10 @@
   align-self: stretch;
   padding: clamp(6px, 1vh, 12px) clamp(8px, 1.2vw, 18px);
 
-  background: #ffffff;
+  /* A fixed pale fill: the border and icon are fixed dark, so a themed
+     fill would go dark behind them in dark mode. Each of Speak, Delete and
+     Clear overrides this with its own pastel. */
+  background: #f4f1ec;
   /* The darker edge, matching the back arrow. */
   border: 5px solid var(--color-edge);
   border-radius: clamp(13px, 2.1vh, 19px);
@@ -526,7 +529,7 @@
   text-align: center;
   font-family: var(--font-body);
   font-size: clamp(0.95rem, 2vh, 1.2rem);
-  color: var(--color-ink);
+  color: var(--color-on-tint);
 }
 
 /* --------------------------------------------------------------------------
@@ -598,7 +601,7 @@
      state is one line rather than a colour per category.
   */
   background: var(--tint, #ffffff);
-  border: 5px solid var(--color-ink);
+  border: 5px solid var(--color-on-tint);
   border-radius: clamp(16px, 2.6vh, 24px);
   /*
      Just the offset drop shadow.
@@ -652,7 +655,7 @@
   justify-content: center;
   overflow: hidden;
   border-radius: clamp(10px, 1.8vh, 16px);
-  background: #ffffff;
+  background: var(--color-surface);
 }
 
 /*
@@ -701,7 +704,7 @@
      uses this one size; the per-type overrides that made core words and
      folder names bigger have been removed. */
   font-size: clamp(1.4rem, 3.3vh, 2.15rem);
-  color: var(--color-ink);
+  color: var(--color-on-tint);
   line-height: 1.15;
   text-align: center;
   /* Long words shrink rather than overflowing their card. */
@@ -933,6 +936,15 @@
    icon and label both have room. Each carries its own pastel with a matching
    --deep for the pressed state.
 */
+/*
+   The base fill is a fixed pale grey, NOT a theme token.
+
+   The border and icon here are --color-on-tint, which stays dark in both
+   themes, so the fill must stay pale in both too. A themed fill would go
+   dark behind a dark icon -- exactly the bug that made Settings invisible.
+   Every modifier below overrides this with its own pastel; this value is
+   the safe default for any button that does not.
+*/
 .cmenu__btn {
   display: flex;
   flex-direction: column;
@@ -950,8 +962,8 @@
   min-height: clamp(64px, 9vh, 108px);
   padding: clamp(6px, 1vh, 12px) 4px;
 
-  background: #ffffff;
-  border: 4px solid var(--color-ink);
+  background: #e4e2de;
+  border: 4px solid var(--color-on-tint);
   border-radius: clamp(12px, 2vh, 18px);
   box-shadow: 0 5px 0 rgba(43, 43, 58, 0.14);
   cursor: pointer;
@@ -960,7 +972,7 @@
   font-weight: 700;
   /* Readable, not shrunk to fit: the strip widens instead. */
   font-size: clamp(0.72rem, 1.6vh, 1rem);
-  color: var(--color-ink);
+  color: var(--color-on-tint);
   line-height: 1.1;
   text-align: center;
 
@@ -1013,6 +1025,19 @@
   --deep: #f9a58e;
 }
 
+/*
+   Settings: a FIXED pale grey, exactly like the five buttons above it.
+
+   It previously used var(--color-surface), which is a theme token. In dark
+   mode that resolved to #2e2e3d -- a dark fill -- while the icon, label and
+   border stayed dark (--color-on-tint, which is fixed by design because
+   these buttons are pale in both themes). The result was dark-on-dark at
+   1.04:1: the button was effectively invisible.
+
+   A literal value fixes it at the root: like its five siblings, this button
+   no longer follows the theme, so the dark icon always has a pale field to
+   sit on. 11.6:1 in both themes.
+*/
 .cmenu__btn--settings {
   background: #e4e2de;
   --deep: #b3aea6;
@@ -1092,7 +1117,7 @@
   display: flex;
   align-items: center;
 
-  background: #ffffff;
+  background: var(--color-surface);
   border: 4px solid var(--color-ink);
   border-radius: clamp(14px, 2.2vh, 20px);
   padding: clamp(8px, 1.2vh, 14px) clamp(12px, 1.6vw, 20px);
@@ -1111,7 +1136,7 @@
   font-family: var(--font-body);
   font-weight: 400;
   font-size: clamp(0.85rem, 1.9vh, 1.1rem);
-  color: #5c5c6b;
+  color: var(--color-muted-text);
 }
 
 .ckeys__close {
@@ -1133,14 +1158,19 @@
   justify-content: center;
 }
 
+/*
+   A key is a pale physical key in BOTH themes -- its letter and border are
+   fixed dark, so the fill must be fixed pale, for the same reason as the
+   sidebar buttons above.
+*/
 .ckeys__key {
   flex: 1;
   min-width: 0;
   /* Comfortably past the 44px minimum touch target. */
   min-height: clamp(44px, 7vh, 74px);
 
-  background: #ffffff;
-  border: 3px solid var(--color-ink);
+  background: #f4f1ec;
+  border: 3px solid var(--color-on-tint);
   border-radius: clamp(8px, 1.4vh, 14px);
   box-shadow: 0 4px 0 rgba(43, 43, 58, 0.14);
   cursor: pointer;
@@ -1148,7 +1178,7 @@
   font-family: var(--font-display);
   font-weight: 700;
   font-size: clamp(0.9rem, 2.4vh, 1.5rem);
-  color: var(--color-ink);
+  color: var(--color-on-tint);
 
   transition: transform 90ms ease-out, box-shadow 90ms ease-out;
 }

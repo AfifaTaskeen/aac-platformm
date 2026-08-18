@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { GRID_SIZES, getGridSize, TEXT_SIZES, getTextSize } from '../boardSettings'
+import {
+  GRID_SIZES,
+  getGridSize,
+  TEXT_SIZES,
+  getTextSize,
+  THEMES,
+  getTheme,
+} from '../boardSettings'
 
 /*
  * SettingsDialog.jsx
@@ -39,6 +46,8 @@ function SettingsDialog({
   onSelectGridSize,
   textSize,
   onSelectTextSize,
+  theme,
+  onSelectTheme,
   onClose,
 }) {
   /*
@@ -130,6 +139,14 @@ function SettingsDialog({
       selected: textSize,
       current: getTextSize(textSize),
       onSelect: onSelectTextSize,
+    },
+    {
+      id: 'theme',
+      title: 'Theme',
+      options: THEMES,
+      selected: theme,
+      current: getTheme(theme),
+      onSelect: onSelectTheme,
     },
   ]
 

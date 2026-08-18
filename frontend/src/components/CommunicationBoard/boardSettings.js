@@ -135,3 +135,64 @@ export function saveTextSize(id) {
     // Saving failed; the choice still applies for this session.
   }
 }
+
+/* -------------------------------------------------------------------------
+   THEME
+
+   Light is the default and is exactly the appearance the app has always had.
+   Dark redefines the surface tokens in index.css -- see the [data-theme]
+   block there. No component knows which theme is active.
+
+   The five category colours are NOT part of this: Food stays yellow and
+   Actions blue in both themes, because that coding is how a child
+   recognises a group.
+   ------------------------------------------------------------------------- */
+export const THEMES = [
+  {
+    id: 'light',
+    label: 'Light',
+    description: 'Bright background',
+  },
+  {
+    id: 'dark',
+    label: 'Dark',
+    description: 'Dark background',
+  },
+]
+
+export const DEFAULT_THEME = 'light'
+
+const THEME_STORAGE_KEY = 'buddytalk.theme'
+
+export function getTheme(id) {
+  return THEMES.find((t) => t.id === id) || THEMES.find((t) => t.id === DEFAULT_THEME)
+}
+
+export function loadTheme() {
+  try {
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY)
+    if (saved && THEMES.some((t) => t.id === saved)) return saved
+  } catch {
+    // Storage unavailable -- fall through to the default.
+  }
+  return DEFAULT_THEME
+}
+
+export function saveTheme(id) {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, id)
+  } catch {
+    // Saving failed; the choice still applies for this session.
+  }
+}
+
+/*
+ * Puts the theme on <html> as data-theme, which is what the CSS block keys
+ * off. Applied to the document root rather than a component so it covers
+ * every screen -- board, settings, and the auth screens too.
+ */
+export function applyTheme(id) {
+  if (typeof document === 'undefined') return
+  const theme = getTheme(id)
+  document.documentElement.setAttribute('data-theme', theme.id)
+}

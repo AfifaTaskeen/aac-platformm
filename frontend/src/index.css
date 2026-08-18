@@ -88,6 +88,14 @@
      paints a panel, a muted label or a selected control should use these
      rather than a literal hex.
      -------------------------------------------------------------------- */
+  /*
+     Text and outlines that sit on a COLOURED surface -- an AAC card, a
+     pastel control. It stays dark in BOTH themes, because those surfaces
+     stay light in both: the category colours never invert, so their labels
+     must not either. Distinct from --color-ink, which follows the theme.
+  */
+  --color-on-tint: #2b2b3a;
+
   --color-surface: #ffffff;      /* a raised panel or an unselected control */
   --color-muted-text: #5c5c6b;   /* secondary text. 6.2:1 on white, so this
                                     is lower EMPHASIS, never lower legibility */
@@ -101,6 +109,37 @@
 
   --font-display: 'Baloo 2', system-ui, sans-serif;
   --font-body: 'Atkinson Hyperlegible', system-ui, sans-serif;
+}
+
+/* --------------------------------------------------------------------------
+   DARK THEME
+
+   Redefines the SURFACE tokens only. Everything in the app already paints
+   from these names, so one block re-themes the whole interface -- no
+   component knows which theme is active.
+
+   The five CATEGORY colours are deliberately absent. Food stays yellow,
+   Actions blue and so on in both themes: that colour coding is how a child
+   recognises a group, and inverting it would destroy the very thing the
+   palette exists for. Only the surfaces AROUND the cards change.
+
+   Measured on these values: body text 14.5:1 on the page, 11.4:1 on a panel,
+   muted text 5.5:1 -- all past the 4.5:1 minimum, so nothing is harder to
+   read in the dark.
+   -------------------------------------------------------------------------- */
+[data-theme='dark'] {
+  --color-cream: #1c1c26;       /* the page */
+  --color-cream-warm: #262633;  /* a slightly raised band, e.g. a header */
+  --color-ink: #f2ede4;         /* text and drawn lines -- warm, not pure
+                                   white, which glares on a dark field */
+
+  --color-surface: #2e2e3d;     /* panels and unselected controls */
+  --color-muted-text: #a9a3b5;  /* secondary text */
+  --color-selected: #4a3d78;    /* a chosen option's fill */
+  --color-selected-deep: #6b5aa8;
+  --color-accent: #a78bfa;      /* the settings hue, lifted so it reads on
+                                   a dark background */
+  --color-on-accent: #1c1c26;   /* text sitting ON the accent */
 }
 
 /* --------------------------------------------------------------------------
