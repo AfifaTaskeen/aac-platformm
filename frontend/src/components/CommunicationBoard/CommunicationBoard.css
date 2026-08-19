@@ -646,10 +646,48 @@
    as part of the picture and keeps the card's category colour uninterrupted
    by a THIRD tone, which cream introduced.
 */
+/*
+   THE PICTURE AREA IS A FIXED SLOT.
+
+   The slot must be the same size on every card, and it must never be sized by
+   the picture inside it -- a 235x333 photo and a 1200x800 one have to occupy
+   an identical area.
+
+   `flex: 1` sizes the BOX from the space left over, which is correct, but it
+   needs a FLOOR. Without one, the slot is whatever remains after the label,
+   the gap, the padding and the border are subtracted -- and on a short row
+   (a 4-column laptop grid at the Large text size) that remainder approaches
+   zero. `min-height: 0` then permits it, the slot collapses, and the picture
+   vanishes: an <img> at `height: 100%` of a zero-height box renders nothing.
+   That is exactly what went wrong.
+
+   So the slot keeps `flex: 1` for its natural behaviour, and gains a floor
+   expressed as a share of the card's own height (--rowh). The floor wins when
+   the remainder would be too small, and the card scrolls slightly rather than
+   silently dropping its picture. A missing image on an AAC board is not a
+   cosmetic bug -- the picture IS the word for a child who cannot read.
+*/
 .ccard__imagebox {
   flex: 1;
   width: 100%;
-  min-height: 0;
+  /*
+     The floor: about two lines of label, which is enough that the picture is
+     always clearly visible and never a sliver.
+
+     Deliberately modest. The row height on most screens is only just enough
+     for a two-line label plus a picture plus the card's padding and border,
+     so a generous floor here would push the total past the row and make every
+     grid scroll. 2.2em of the CARD's font size tracks the text size setting
+     and stays in proportion at every breakpoint.
+
+     NOT derived from --rowh: that variable is built from --actual-colw, which
+     contains a `100%` term, and a percentage inside an inherited custom
+     property resolves against whichever element finally uses it -- here this
+     box's own width rather than the grid's. The emoji rules tolerate that
+     looseness because they only pick a font size; a floor guarding against a
+     collapsed slot cannot.
+  */
+  min-height: 2.2em;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -659,16 +697,42 @@
 }
 
 /*
-   `contain`, not `cover`: a photograph of food should never be cropped so
-   far that the child cannot recognise it. Letterboxing on the cream
-   background is the lesser cost.
+   The image FILLS its slot; `contain` then fits the photograph inside it.
+
+   The distinction is the whole fix. Previously this was width/height: auto
+   with max-*: 100%, which let the source file's own dimensions decide how big
+   the element was -- a 235x333 photo produced a small portrait element, a
+   1200x800 one a wide landscape element, and the slot appeared to change size
+   with the picture.
+
+   Now the element is always exactly the slot: 100% x 100%. `object-fit:
+   contain` scales the photograph down to fit INSIDE that fixed box, keeping
+   its aspect ratio and letterboxing whatever is left over. So the picture is
+   never stretched or distorted, yet the area it occupies is identical on
+   every card in every folder.
+
+   `contain` rather than `cover` remains deliberate: a photograph of food must
+   never be cropped so far that a child cannot recognise it. Letterboxing on
+   the white panel is the lesser cost.
+
+   object-position: center keeps the letterboxing even on both sides rather
+   than the picture sitting against one edge. It is the default, but stated
+   because it is load-bearing here -- with slots of a fixed size and pictures
+   of many shapes, where the picture sits inside the slot is now a visible
+   decision rather than an accident.
+
+   `height: 100%` alone was not safe: percentage heights resolve against the
+   parent, so if the slot ever computed to zero the picture rendered at zero
+   too and simply disappeared. The slot now has a floor (see above), and
+   min-height: 100% here is a second guard -- the image fills the slot even
+   if a future change makes the parent's height ambiguous.
 */
 .ccard__image {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 
@@ -705,7 +769,9 @@
      folder names bigger have been removed. */
   font-size: clamp(1.4rem, 3.3vh, 2.15rem);
   color: var(--color-on-tint);
-  line-height: 1.15;
+  /* line-height is set once, further down alongside the label's minimum
+     height, so the two cannot drift apart -- that minimum is calculated FROM
+     this value. */
   text-align: center;
   /* Long words shrink rather than overflowing their card. */
   overflow-wrap: anywhere;
@@ -1440,6 +1506,36 @@
    pushing past the card edge. The line height is tightened a little so a
    wrapped label still fits under the picture.
 */
+/*
+   A FIXED TWO-LINE LABEL ROW -- the second half of the uniform-size fix.
+
+   The picture slot takes the space the label leaves. So while the label's
+   height varied, the slot varied too: "Eat" wrapped to one line and got a
+   tall picture area, "Bathroom" and "Hospital" wrapped to two and got a
+   shorter one. Same outer card, visibly different picture area -- the other
+   half of what read as inconsistent sizing, and the reason it looked worst in
+   Places and People, whose words are the longest.
+
+   Reserving exactly two lines fixes the label row for EVERY card, whatever
+   the word. The height is calc(2 * 1.12em) -- two line-heights, expressed
+   against the element's OWN font-size. Because it is relative, it tracks the
+   Text Size setting automatically and needs no value per setting.
+
+   `em` rather than the `lh` unit deliberately: `lh` says exactly this and is
+   cleaner, but it needs Chrome 109 / Safari 16.4, slightly newer than this
+   build's floor. On an older tablet -- plausible for a device like this --
+   the declaration would be dropped and the label row would go back to
+   varying. calc() with em is supported everywhere and computes the same
+   number, so the layout does not depend on a recent browser.
+
+   The label is centred within that fixed row, so a one-line word sits
+   optically level with a two-line one rather than riding high against the
+   picture.
+
+   Three lines is the ceiling on the longest word at the largest text size;
+   `anywhere` breaks it rather than letting it push past the card edge. That
+   case does not resize the slot, because the height here is fixed.
+*/
 .ccard__label {
   overflow-wrap: anywhere;
   hyphens: auto;
@@ -1448,6 +1544,35 @@
      and the image box takes what is left. */
   flex: none;
   width: 100%;
+
+  /*
+     A CONSISTENT label area, without starving the picture.
+
+     The goal is that "Eat" and "Bathroom" occupy the same height, so the
+     picture slot above them is the same on every card. The obvious way to do
+     that -- a fixed two-line `height` -- is what broke the board: the label
+     is sized in vh, so on a tall narrow screen two lines came to 74px inside
+     a 111px row, leaving the picture nothing and making every image vanish.
+
+     So the reservation is a MINIMUM, and the flex-basis is what actually
+     equalises the cards: every label starts from the same two-line basis and
+     the picture takes the rest. A word that needs a second line already has
+     it; a word that does not still reserves it.
+
+     `overflow: hidden` was removed with the fixed height. Clipping a word on
+     an AAC board is worse than a slight layout shift -- the word is the point.
+  */
+  min-height: calc(2 * 1.12em);
+  /*
+     The cap. The label may never take more than 45% of the card, whatever the
+     text size or screen proportions -- which is the guard the fixed height
+     lacked. The picture is guaranteed the remainder, so it can never be
+     squeezed out of existence again.
+  */
+  max-height: 45%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* ==========================================================================

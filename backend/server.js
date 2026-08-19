@@ -10,6 +10,8 @@ const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 /* Google Cloud Text-to-Speech, kept in its own module -- see tts.js. */
 const tts = require("./tts");
+/* The starting board a new child profile is given -- see boardData.js. */
+const { seedBoardForChild, POSITION_STEP } = require("./boardData");
 
 const app = express();
 
@@ -129,6 +131,13 @@ const client = new MongoClient(process.env.MONGODB_URI, {
 // Set once the connection succeeds, so the routes can reach the collections.
 let users;
 let childProfiles;
+/*
+ * The communication board's data. Same database, same client, same pattern as
+ * the two above -- these are two more collections inside BuddyTalk, not a new
+ * connection and not a new database.
+ */
+let folders;
+let cards;
 
 // How many rounds bcrypt uses when hashing. Higher = slower = harder to crack.
 const SALT_ROUNDS = 10;
@@ -180,6 +189,13 @@ async function connectDB() {
         const db = client.db("BuddyTalk");
         users = db.collection("users");
         childProfiles = db.collection("childProfiles");
+        /*
+         * The board's two collections. Created lazily by MongoDB on first
+         * write, so naming them here costs nothing and does not disturb the
+         * existing users/childProfiles data in any way.
+         */
+        folders = db.collection("folders");
+        cards = db.collection("cards");
 
         /*
          * Tell MongoDB that no two documents may share the same email.
@@ -208,7 +224,50 @@ async function connectDB() {
          */
         await childProfiles.createIndex({ userId: 1 }, { unique: true });
 
-        console.log("Unique indexes on email, googleId and childProfiles.userId are ready");
+        /* ------------------------------------------------------------------
+           BOARD INDEXES
+
+           Every board query filters by childProfileId -- that is the whole
+           point of the design, since one child must never see another's
+           cards. Without an index MongoDB would scan every card belonging to
+           every child on every board load, which is fine with one family and
+           unusable with a thousand.
+
+           The compound indexes put childProfileId FIRST deliberately. A
+           compound index can serve any leading subset of its fields, so
+           { childProfileId, position } also answers a plain childProfileId
+           query -- and it returns the rows already sorted, so MongoDB never
+           has to sort them in memory.
+           ------------------------------------------------------------------ */
+
+        /* "All this child's folders, in display order" -- the folder query. */
+        await folders.createIndex({ childProfileId: 1, position: 1 });
+
+        /*
+         * Two documents belonging to the SAME child may not share a key. This
+         * is what makes seeding safe to attempt twice: if two requests race,
+         * the second insert is refused by the database rather than producing a
+         * duplicate board.
+         *
+         * Scoped to the child, so every child still gets their own "food"
+         * folder -- the pair must be unique, not the key alone.
+         */
+        await folders.createIndex({ childProfileId: 1, key: 1 }, { unique: true });
+
+        /* "All this child's cards, in order" -- used by the board load. */
+        await cards.createIndex({ childProfileId: 1, position: 1 });
+
+        /*
+         * "This child's cards inside this folder" -- the single most frequent
+         * query once a child starts opening folders. Also covers core words,
+         * which are the folderId: null case.
+         */
+        await cards.createIndex({ childProfileId: 1, folderId: 1, position: 1 });
+
+        /* The same anti-duplicate guarantee as folders. */
+        await cards.createIndex({ childProfileId: 1, key: 1 }, { unique: true });
+
+        console.log("Indexes ready: users, childProfiles, folders, cards");
 
         // Reports whether SMTP works, so a typo in .env is obvious at startup
         // rather than only when a reset email silently fails to arrive.
