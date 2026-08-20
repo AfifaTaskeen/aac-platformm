@@ -90,7 +90,15 @@ const CATEGORIES = [
     { key: "places", name: "Places", emoji: "🏠", colorKey: "places" },
     { key: "things-objects", name: "Things & Objects", emoji: "🎒", colorKey: "things" },
     { key: "letters", name: "Letters", emoji: "🔤", colorKey: "letters" },
-    { key: "numbers", name: "Numbers", emoji: "🔢", colorKey: "numbers" }
+    { key: "numbers", name: "Numbers", emoji: "🔢", colorKey: "numbers" },
+    /*
+     * Added when the image library grew to include them. Emergency comes
+     * FIRST in a real AAC board -- "I am hurt", "call mom", "stop" are the
+     * words a child needs fastest -- but the order here follows the existing
+     * list so no current folder shifts position on an existing board.
+     */
+    { key: "emergency", name: "Emergency", emoji: "🚨", colorKey: "emergency" },
+    { key: "school", name: "School", emoji: "🏫", colorKey: "school" }
 ];
 
 /*
@@ -111,7 +119,9 @@ const DIRECTORY_TO_CATEGORY = [
     [/^places?$/i, "places"],
     [/^things?\s*(and|&)?\s*objects?$/i, "things-objects"],
     [/^letters?$/i, "letters"],
-    [/^numbers?$/i, "numbers"]
+    [/^numbers?$/i, "numbers"],
+    [/^emergency$/i, "emergency"],
+    [/^school$/i, "school"]
 ];
 
 /* ==========================================================================
@@ -151,7 +161,50 @@ const OVERRIDES = {
      * but it duplicates 14_hot.jpg. Renamed so the two cards are
      * distinguishable rather than two identical-looking "Hot"s.
      */
-    "Feelings/hot.jpg": { word: "Feeling hot" }
+    "Feelings/hot.jpg": { word: "Feeling hot" },
+
+    /* ----------------------------------------------------------------------
+       THE SIX URGENT-NEED EMERGENCY CARDS
+
+       These are the words a child reaches for through the Alert button, so
+       the label has to be the whole SENTENCE, not the noun. A child in
+       distress who taps a card labelled "Toilet" has named a room; one who
+       taps "I need the toilet" has made a request an adult can act on. That
+       difference is the entire point of the card, so the wording is fixed
+       here rather than left to the filename.
+
+       Each file below was OPENED and looked at before being given its word:
+
+         toilet.jpg            a toilet, lid up, with paper and a spray
+         I want water.jpg      a full glass of water on a table
+         I need medicine.jpg   pill bottles and blister packs
+         I cant breathe.jpg    a person clutching their chest, mouth open
+         I feel sick.jpg       nausea
+         I am hurt.jpg         a child gripping a grazed, bruised knee
+
+       The filenames are NOT renamed. Renaming would break the imageUrl
+       already stored on the seeded cards, and the file's name is only ever
+       an input to the word -- never the word itself.
+       ---------------------------------------------------------------------- */
+    "Emergency/toilet.jpg": { word: "I need the toilet" },
+    "Emergency/I want water.jpg": { word: "I need water" },
+    "Emergency/I need medicine.jpg": { word: "I need my medicine" },
+    "Emergency/I cant breathe.jpg": { word: "I can't breathe" },
+    "Emergency/I feel sick.jpg": { word: "I feel sick" },
+    "Emergency/I am hurt.jpg": { word: "I am hurt" },
+
+    /*
+     * The OLDER "I am hurt" image, which this new one replaces as the card
+     * for that word. It shows a plaster already being applied to a healed
+     * knee -- aftercare, not the moment of being hurt -- so it is the weaker
+     * picture for a child trying to report an injury NOW.
+     *
+     * It is kept rather than deleted (it is a perfectly good picture, and
+     * deleting a caregiver-visible asset is not this file's business), but
+     * given a distinct word so the two do not collide into duplicate "I am
+     * hurt" cards sitting side by side in the same folder.
+     */
+    "Emergency/I am hurt.jpeg": { word: "I hurt my knee" }
 };
 
 /* ==========================================================================
@@ -169,6 +222,9 @@ const WORD_OVERRIDES = {
     doctor_s_office: "Doctor's office",
     "doctor_s office": "Doctor's office",
     icecream: "Ice cream",
+    /* The supplied file is spelled "emmergency.jpeg". The FILE is not
+       renamed -- only the card's word is corrected. */
+    emmergency: "Emergency",
     bro: "Brother",
     dad: "Dad",
     mom: "Mom",
@@ -464,7 +520,15 @@ async function seedBoardForChild(collections, childProfileId, options = {}) {
 
             cardDocs.push({
                 childProfileId,
-                key: `${category.key}-${slugify(file.fileName.replace(IMAGE_PATTERN, ""))}`,
+                /*
+                 * The key includes the EXTENSION, because a folder can hold
+                 * two files whose names differ only by it -- "yes.jpeg" and
+                 * "yes.jpg" both exist in Core Words. Slugifying the stem
+                 * alone made both "core-words-yes", and the unique
+                 * (childProfileId, key) index correctly refused the second,
+                 * which aborted the whole seed.
+                 */
+                key: `${category.key}-${slugify(file.fileName)}`,
                 word: file.word,
                 /* Every card belongs to a real folder, INCLUDING core words --
                    which is what lets the Core Words folder open and show all

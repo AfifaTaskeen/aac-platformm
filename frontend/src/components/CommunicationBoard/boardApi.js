@@ -224,10 +224,33 @@ export async function fetchBoard({ signal } = {}) {
    * Words group remains openable by anything that asks for it by key -- Edit
    * Words lists it, and its cards stay editable.
    */
-  const isCoreWordsFolder = (category) =>
-    category.id === 'core' || /^core\s*words?$/i.test(category.label || '')
+  /*
+   * SPECIAL-ACCESS FOLDERS.
+   *
+   * Two folders are real folders in MongoDB -- real documents, real cards,
+   * editable like any other -- but are deliberately NOT drawn as tiles on the
+   * board. Each has its own dedicated button in the right-hand menu instead:
+   *
+   *   Core Words  -> the "Core Words" button
+   *   Emergency   -> the "Alert" button
+   *
+   * Emergency is hidden for a specific reason rather than for tidiness: a
+   * child who is hurt or frightened should not have to find the right tile
+   * among thirteen. One always-visible button is faster and works the same
+   * from anywhere on the board.
+   *
+   * Filtering here, in one place, is what guarantees they cannot appear
+   * twice: `categories` (the tiles) excludes them, while `cardsByCategory`
+   * below is still keyed for EVERY folder, so their own buttons can open
+   * them and Edit Words can still list them.
+   */
+  const isSpecialAccessFolder = (category) =>
+    category.id === 'core' ||
+    category.id === 'emergency' ||
+    /^core\s*words?$/i.test(category.label || '') ||
+    /^emergency$/i.test(category.label || '')
 
-  const categories = allCategories.filter((category) => !isCoreWordsFolder(category))
+  const categories = allCategories.filter((category) => !isSpecialAccessFolder(category))
 
   /*
    * Split once, here, rather than filtering on every render. The board asks

@@ -128,6 +128,22 @@ export const CATEGORIES = [
   { id: 'things', label: 'Things & Objects', tint: '#bdfffb', deep: '#47d9d0', accent: '#00756e', emoji: '🎒' },
   { id: 'letters', label: 'Letters', tint: '#ffbdde', deep: '#d94790', accent: '#75003b', emoji: '🔤' },
   { id: 'numbers', label: 'Numbers', tint: '#edffbd', deep: '#b1d947', accent: '#557500', emoji: '🔢' },
+
+  /*
+     Added with the Emergency and School folders.
+
+     RED for Emergency and GREEN for School, deliberately -- a colour search
+     for maximum separation happened to suggest the reverse, and a green
+     "Emergency" tile would be actively misleading on a board a child reaches
+     for when hurt. Meaning wins over the arithmetic here; both still measure
+     well clear of every other tint.
+
+     Measured: emergency 9.1:1 against ink and deltaE 14.3 from its nearest
+     neighbour, school 10.9:1 and 15.9 -- both above the palette's own
+     closest existing pair (food<->people at 13.5).
+  */
+  { id: 'emergency', label: 'Emergency', tint: '#ffc2c4', deep: '#d95256', accent: '#750004', emoji: '🚨' },
+  { id: 'school', label: 'School', tint: '#aef2d0', deep: '#37ce83', accent: '#006f38', emoji: '🏫' },
 ]
 
 /*

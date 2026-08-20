@@ -67,6 +67,12 @@ const COVERS = {
   things: 'Bag.jpg',
   letters: 'Letters.jpg',
   numbers: 'Numbers.jpg',
+  /*
+     Lower-case filename, matching the file as supplied. The lookup is
+     case-SENSITIVE because a static file server is: asking for "School.jpg"
+     when the file is "school.jpg" returns the SPA fallback, not the picture.
+  */
+  school: 'school.jpg',
 }
 
 /*
@@ -87,6 +93,11 @@ export function folderCoverUrl(category) {
      actually chosen one, so its presence IS the signal. */
   if (category.imageUrl) return category.imageUrl
 
+  /*
+   * Emergency is deliberately absent from the table: it is a special-access
+   * folder reached through the Alert button and is never drawn as a tile, so
+   * a cover for it would never be shown.
+   */
   const file = COVERS[category.id]
   return file ? coverUrl(file) : null
 }

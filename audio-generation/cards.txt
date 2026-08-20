@@ -1,0 +1,312 @@
+I
+You
+Want
+Need
+Like
+Don't like
+Yes
+Help
+Finished
+Go
+Come
+Can
+Do
+Don't
+Finish
+Get
+Give
+Have
+Your
+Make
+More
+No
+That
+There
+This
+Okay
+
+Close
+Give
+Go
+Come
+Drink
+Eat
+Help
+Hold
+Play
+Open
+Look
+Listen
+Pull
+Push
+Run
+Sit
+Take
+Stop
+Stand
+Sleep
+Tell
+Wait
+Wake up
+Walk
+Wash
+
+Color
+Go for walk
+Go to playground
+Dance
+Do homework
+Listen to music
+Make art
+Draw
+Paint
+Play games
+Play outside
+Play with friends
+Play with toys
+Read
+Rest
+Ride a bicycle
+Use computer
+Study
+Story time
+Sing
+Use tablet
+Watch movie
+Watch TV
+Watch YouTube
+Write
+
+Head
+Eyes
+Nose
+Mouth
+Teeth
+Arm
+Leg
+Foot
+Stomach
+Hair
+Pain
+Medicine
+Bathroom
+Bag
+Better
+Chest
+Cold
+Cough
+Dizzy
+Fever
+Finger
+Hand
+Sleepy
+Throat
+Worse
+Ear
+Hurt
+
+Happy
+Sad
+Angry
+Scared
+Tired
+Excited
+Worried
+Bored
+Sick
+Hungry
+Thirsty
+Cold
+Bad
+Confused
+Fine
+Frustrated
+Good
+Feeling
+Hot
+Lonely
+Nervous
+Okay
+Proud
+Surprised
+
+Banana
+Biscuit
+Bread
+Breakfast
+Chapati
+Chicken
+Coffee
+Curd
+Dal
+Dinner
+Dosa
+Egg
+Fruit
+Ice cream
+Idli
+Juice
+Lunch
+Milk
+Puri
+Rice
+Roti
+Sambar
+Snack
+Tea
+Upma
+Vegetables
+Water
+
+Aunt
+Boy
+Brother
+Caregiver
+Classmates
+Cousins
+Dad
+Doctor
+Driver
+Family
+Friends
+Girl
+Grandfather
+Grandmother
+Helper
+Me
+Mom
+Neighbor
+Uncle
+Teacher
+Sister
+Therapist
+Principal
+Nurse
+
+Bathroom
+Bedroom
+Bus stop
+Classroom
+Clinic
+Doctor's office
+Garden
+Home
+Hospital
+Inside
+Kitchen
+Library
+Living room
+Outside
+Park
+Playground
+Restaurant
+School
+Shop
+Therapy room
+Toilet
+
+Backpack
+Bag
+Bed
+Blanket
+Book
+Bottle
+Bowl
+Chair
+Charger
+Clothes
+Computer
+Cup
+Door
+Fork
+Glass
+Pencil
+Phone
+Pillow
+Plate
+Remote
+Shoes
+Soap
+Table
+Tablet
+Toothbrush
+Towel
+Toy
+Umbrella
+Water bottle
+
+A
+B
+C
+D
+E
+F
+G
+H
+I
+J
+K
+L
+M
+N
+O
+P
+Q
+R
+S
+T
+U
+V
+W
+X
+Y
+Z
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+
+School
+Bag
+Bathroom
+Book
+Class
+Classroom
+Draw
+Eraser
+Help
+Homework
+Listen
+Lunch
+Notebook
+Pen
+Pencil
+Question
+Read
+Teacher
+Test
+Water
+
+Call mom
+Call teacher
+Call doctor
+Emergency
+I hurt my knee
+I am scared
+I am sick
+I am lonely
+I am nervous
+Nurse
+Stop
+I am hurt
+I can't breathe
+I feel sick
+I need my medicine
+I need water
+I want to go to toilet

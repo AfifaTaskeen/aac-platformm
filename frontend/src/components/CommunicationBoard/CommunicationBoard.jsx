@@ -57,6 +57,17 @@ const FALLBACK_GRID_SIZE = 3
  */
 const CORE_WORDS_KEY = 'core'
 
+/*
+ * The key the Emergency folder is filed under.
+ *
+ * Like Core Words, Emergency is a real folder in MongoDB but is NOT drawn as
+ * a board tile (see boardApi.js). Its entry point is the Alert button, which
+ * is always visible in the right-hand menu -- so a child who is hurt or
+ * frightened reaches these words in one tap from anywhere, instead of
+ * hunting for a tile among thirteen.
+ */
+const EMERGENCY_KEY = 'emergency'
+
 function CommunicationBoard({ childProfile }) {
   /*
    * The sentence being built: an array of card objects, in tap order.
@@ -594,7 +605,17 @@ function CommunicationBoard({ childProfile }) {
           onScrollDown={() => scrollCards(1)}
           canScrollUp={canScrollUp}
           canScrollDown={canScrollDown}
-          onAlert={playAlert}
+          /*
+           * Alert now does two things: it sounds the attention tone, exactly
+           * as before, AND opens the Emergency folder -- the sound calls an
+           * adult over while the cards give the child the words to explain.
+           * The tone is kept because it was the button's whole purpose until
+           * now, and losing it would remove a working feature.
+           */
+          onAlert={() => {
+            playAlert()
+            openFolder(EMERGENCY_KEY)
+          }}
         />
       </div>
 
