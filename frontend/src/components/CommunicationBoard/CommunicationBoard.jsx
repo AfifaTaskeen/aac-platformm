@@ -5,6 +5,7 @@ import Keyboard from './components/Keyboard'
 import CommunicationCard from './components/CommunicationCard'
 import PlaceholderDialog from './components/PlaceholderDialog'
 import SettingsDialog from './components/SettingsDialog'
+import EditCardDialog from './components/EditCardDialog'
 import {
   getGridSize,
   loadGridSize,
@@ -15,7 +16,13 @@ import {
   saveTheme,
   applyTheme,
 } from './boardSettings'
-import { BASIC_WORDS, CATEGORIES, cardsInCategory } from './cardData'
+import { fetchBoard } from './boardApi'
+/*
+ * The PALETTE only. The words and folders now come from MongoDB; cardData.js
+ * still owns what each category LOOKS like, because a colour is presentation
+ * and belongs beside the stylesheet rather than in a database document.
+ */
+import { categoryColors } from './cardData'
 import { speak, playAlert } from './speech'
 import './CommunicationBoard.css'
 
@@ -55,11 +62,59 @@ function CommunicationBoard({ childProfile }) {
   const [openCategory, setOpenCategory] = useState(null)
 
   /*
-   * True while a tapped card is flying to the centre and back. The card
-   * area drops its clipping for that moment, so the card is not sliced off
-   * as it crosses the board.
+   * THE BOARD ITSELF, loaded from MongoDB.
+   *
+   * `board` holds { basicWords, categories, cardsByCategory } once the
+   * request succeeds, and stays null until then. Three states, and exactly
+   * one is true at a time:
+   *
+   *   board === null && !error   ->  still loading
+   *   error                      ->  the request failed
+   *   board                      ->  render it
+   *
+   * There is deliberately no fallback to cardData.js. Quietly rendering the
+   * built-in words when the database is unreachable would hide the failure at
+   * the worst possible moment: a caregiver's edits would silently vanish and
+   * the board would look fine, so nobody would know to fix it.
    */
-  const [isPopping, setIsPopping] = useState(false)
+  const [board, setBoard] = useState(null)
+  const [boardError, setBoardError] = useState(null)
+
+  /* Bumped to re-run the fetch when the user presses Try again. */
+  const [reloadCount, setReloadCount] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    setBoardError(null)
+
+    fetchBoard({ signal: controller.signal })
+      .then((loaded) => setBoard(loaded))
+      .catch((error) => {
+        // An abort is this component going away, not a failure to report.
+        if (error.name === 'AbortError') return
+        console.log('Could not load the board:', error)
+        setBoardError(error.message || 'Could not load the board. Please try again.')
+      })
+
+    return () => controller.abort()
+  }, [reloadCount])
+
+  /*
+   * Re-reads the board from MongoDB after an edit.
+   *
+   * Awaited by the edit dialog, which closes only once this resolves -- so
+   * the panel never disappears before the change it made is on screen. It
+   * deliberately re-FETCHES rather than patching the local copy: the database
+   * is the source of truth, and a locally-applied change could disagree with
+   * what was actually stored.
+   */
+  const reloadBoard = useCallback(async () => {
+    const loaded = await fetchBoard()
+    setBoard(loaded)
+  }, [])
+
+  const [isEditOpen, setIsEditOpen] = useState(false)
 
   /*
    * The Grid Size setting. Read from localStorage on first render -- the
@@ -307,15 +362,43 @@ function CommunicationBoard({ childProfile }) {
       return <Keyboard onAddWord={handleAddTypedWord} onClose={() => setIsKeyboardOpen(false)} />
     }
 
-    if (openCategory) {
+    /*
+     * Still fetching, or the fetch failed. Both are shown INSIDE the card
+     * area, so the sentence bar and the toolbar stay exactly where they are
+     * -- the screen does not jump when the board arrives.
+     */
+    if (boardError) {
       return (
-        <div className="cboard__grid" style={gridStyleFor(cardsInCategory(openCategory).length)}>
-          {cardsInCategory(openCategory).map((card) => (
+        <div className="cboard__status" role="alert">
+          <p className="cboard__status-text">{boardError}</p>
+          <button
+            type="button"
+            className="cboard__status-btn"
+            onClick={() => setReloadCount((n) => n + 1)}
+          >
+            Try again
+          </button>
+        </div>
+      )
+    }
+
+    if (!board) {
+      return (
+        <div className="cboard__status" role="status" aria-live="polite">
+          <p className="cboard__status-text">Loading the board…</p>
+        </div>
+      )
+    }
+
+    if (openCategory) {
+      const cardsHere = board.cardsByCategory.get(openCategory) || []
+      return (
+        <div className="cboard__grid" style={gridStyleFor(cardsHere.length)}>
+          {cardsHere.map((card) => (
             <CommunicationCard
               key={card.id}
               card={card}
               onSelect={handleSelectCard}
-              onPopChange={setIsPopping}
             />
           ))}
         </div>
@@ -330,18 +413,20 @@ function CommunicationBoard({ childProfile }) {
      * past to reach them.
      */
     return (
-      <div className="cboard__grid" style={gridStyleFor(BASIC_WORDS.length + CATEGORIES.length)}>
-        {BASIC_WORDS.map((card) => (
+      <div
+        className="cboard__grid"
+        style={gridStyleFor(board.basicWords.length + board.categories.length)}
+      >
+        {board.basicWords.map((card) => (
           <CommunicationCard
             key={card.id}
             card={card}
             onSelect={handleSelectCard}
-            onPopChange={setIsPopping}
             isCore
           />
         ))}
 
-        {CATEGORIES.map((category) => (
+        {board.categories.map((category) => (
           <button
             type="button"
             /*
@@ -352,7 +437,16 @@ function CommunicationBoard({ childProfile }) {
              */
             className="ccard ccard--tinted cfolder"
             key={category.id}
-            style={{ '--tint': category.tint, '--deep': category.deep }}
+            /*
+             * The colours come from the PALETTE, looked up by the folder's
+             * colorKey -- not from the database. cardData.js still owns what
+             * "food" looks like, which is why the folders are painted exactly
+             * as they were before this change.
+             */
+            style={{
+              '--tint': categoryColors(category.id)?.tint,
+              '--deep': categoryColors(category.id)?.deep,
+            }}
             onClick={() => openFolder(category.id)}
             aria-label={`Open ${category.label} folder`}
           >
@@ -406,10 +500,20 @@ function CommunicationBoard({ childProfile }) {
             The keyboard renders in here too, which is why it can never cover
             the sentence bar or the toolbar.
           */}
+          {/*
+            NOTE: there is deliberately no --popping class here any more.
+
+            It used to switch this element to `overflow: visible` for the
+            duration of a tap, to stop an enlarged card being clipped. That
+            was the cause of the screen jumping on lower rows: this element is
+            a SCROLL CONTAINER (overflow-y: auto), and an element that stops
+            being scrollable discards its scrollTop -- so the board snapped
+            back to the top on every tap once the child had scrolled down.
+            The card no longer travels far enough to need the extra room.
+          */}
           <div
             className={[
               'cboard__cards',
-              isPopping ? 'cboard__cards--popping' : '',
               gridSizeId === 'small' ? 'cboard__cards--small' : '',
               gridSizeId === 'large' ? 'cboard__cards--large' : '',
             ]
@@ -470,7 +574,27 @@ function CommunicationBoard({ childProfile }) {
             setThemeId(id)
             saveTheme(id)
           }}
+          /* Settings closes as Edit Words opens, so only one panel is ever
+             on screen. */
+          onEditWords={() => {
+            setIsSettingsOpen(false)
+            setIsEditOpen(true)
+          }}
           onClose={() => setIsSettingsOpen(false)}
+        />
+      )}
+
+      {/*
+        Editing needs the board to list folders and cards, so it only opens
+        once the board has loaded. There is no path to it while loading --
+        Settings itself is reachable, but the row leads here only after the
+        data exists.
+      */}
+      {isEditOpen && board && (
+        <EditCardDialog
+          board={board}
+          onSaved={reloadBoard}
+          onClose={() => setIsEditOpen(false)}
         />
       )}
     </div>

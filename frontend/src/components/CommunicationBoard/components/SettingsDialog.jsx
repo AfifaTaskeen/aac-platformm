@@ -48,6 +48,7 @@ function SettingsDialog({
   onSelectTextSize,
   theme,
   onSelectTheme,
+  onEditWords,
   onClose,
 }) {
   /*
@@ -239,6 +240,31 @@ function SettingsDialog({
           ) : (
             /* ---------- The settings list ---------- */
             <div className="cset__rows">
+              {/*
+                Edit Words leads the list. Unlike the rows below it, it is an
+                ACTION rather than a value to choose -- it opens its own
+                screen -- which is why it is not part of the `settings` array
+                and shows no current value beside its name.
+              */}
+              <button type="button" className="cset__row" onClick={onEditWords}>
+                <span className="cset__row-label">Edit Words</span>
+                <svg
+                  className="cset__row-chevron"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    d="M9 5l7 7-7 7"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+
               {settings.map((setting) => (
                 <button
                   type="button"

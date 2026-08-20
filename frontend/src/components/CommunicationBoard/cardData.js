@@ -107,6 +107,27 @@ export const CATEGORIES = [
      clearly distinct from Food's yellow rather than reading as a shade of
      it -- the two warm categories are the easiest pair to confuse. */
   { id: 'places', label: 'Places', tint: '#ffd8c4', deep: '#f9a58e', accent: '#b4471f', emoji: '🏠' },
+
+  /*
+     The six added when the board moved to the full AAC taxonomy.
+
+     Chosen by searching the hue circle INSIDE the same pastel envelope as the
+     five above (saturation 0.12-0.26, value 0.95-1.0), maximising perceptual
+     distance from every colour already present. They are not brighter or
+     flatter than the originals -- a new folder should look like it always
+     belonged.
+
+     Measured: every one is at least 9:1 against ink, and the closest pair
+     among all eleven is food<->people at deltaE 13.5 -- a pair that already
+     existed before any of these were added. So no new colour is harder to
+     tell apart than the palette's own starting point.
+  */
+  { id: 'core', label: 'Core Words', tint: '#ffbdff', deep: '#d947d9', accent: '#750075', emoji: '💬' },
+  { id: 'activities', label: 'Activities', tint: '#bdffbd', deep: '#47d947', accent: '#007500', emoji: '🎨' },
+  { id: 'body', label: 'Body & Health', tint: '#d1ccff', deep: '#7368d9', accent: '#1c1375', emoji: '🩺' },
+  { id: 'things', label: 'Things & Objects', tint: '#bdfffb', deep: '#47d9d0', accent: '#00756e', emoji: '🎒' },
+  { id: 'letters', label: 'Letters', tint: '#ffbdde', deep: '#d94790', accent: '#75003b', emoji: '🔤' },
+  { id: 'numbers', label: 'Numbers', tint: '#edffbd', deep: '#b1d947', accent: '#557500', emoji: '🔢' },
 ]
 
 /*

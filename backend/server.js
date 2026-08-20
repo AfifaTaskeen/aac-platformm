@@ -7,11 +7,14 @@ const { OAuth2Client } = require("google-auth-library");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 const crypto = require("crypto");
+const path = require("path");
+/* Promise-based fs, so the image listing can be awaited like everything else. */
+const fs = require("fs/promises");
 const nodemailer = require("nodemailer");
 /* Google Cloud Text-to-Speech, kept in its own module -- see tts.js. */
 const tts = require("./tts");
 /* The starting board a new child profile is given -- see boardData.js. */
-const { seedBoardForChild, POSITION_STEP } = require("./boardData");
+const { seedBoardForChild, ORDER_STEP, toImageUrl, CARD_IMAGE_ROOT } = require("./boardData");
 
 const app = express();
 
@@ -75,7 +78,22 @@ app.use((req, res, next) => {
         res.header("Access-Control-Allow-Credentials", "true");
     }
 
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    /*
+     * PATCH is in this list because the card and folder edit routes use it.
+     *
+     * A method missing here is not a 405 -- it is a request the browser never
+     * sends at all. For anything other than a simple GET/POST the browser
+     * first asks OPTIONS "may I use this method?", and if the answer does not
+     * name it, the real request is blocked in the browser. fetch() then
+     * rejects with a bare TypeError carrying no status, which looks exactly
+     * like the server being unreachable. That is precisely how the missing
+     * PATCH presented: "Could not reach the server", while the server was
+     * running perfectly and every GET worked.
+     *
+     * Node's http client does not enforce CORS, so back-end tests cannot
+     * catch this -- only a browser can.
+     */
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
     // The response differs per origin, so caches must not mix them up.
     res.header("Vary", "Origin");
@@ -241,7 +259,7 @@ async function connectDB() {
            ------------------------------------------------------------------ */
 
         /* "All this child's folders, in display order" -- the folder query. */
-        await folders.createIndex({ childProfileId: 1, position: 1 });
+        await folders.createIndex({ childProfileId: 1, order: 1 });
 
         /*
          * Two documents belonging to the SAME child may not share a key. This
@@ -255,14 +273,14 @@ async function connectDB() {
         await folders.createIndex({ childProfileId: 1, key: 1 }, { unique: true });
 
         /* "All this child's cards, in order" -- used by the board load. */
-        await cards.createIndex({ childProfileId: 1, position: 1 });
+        await cards.createIndex({ childProfileId: 1, order: 1 });
 
         /*
          * "This child's cards inside this folder" -- the single most frequent
          * query once a child starts opening folders. Also covers core words,
          * which are the folderId: null case.
          */
-        await cards.createIndex({ childProfileId: 1, folderId: 1, position: 1 });
+        await cards.createIndex({ childProfileId: 1, folderId: 1, order: 1 });
 
         /* The same anti-duplicate guarantee as folders. */
         await cards.createIndex({ childProfileId: 1, key: 1 }, { unique: true });
@@ -1313,6 +1331,892 @@ app.post("/api/child-profile", requireAuth, async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Something went wrong. Please try again."
+        });
+    }
+});
+
+/* ==========================================================================
+   THE COMMUNICATION BOARD -- FOLDERS AND CARDS
+
+   The ownership chain, which every route below depends on:
+
+       session cookie -> users._id -> childProfiles.userId -> childProfiles._id
+                                                                     |
+                                            folders.childProfileId <-+
+                                              cards.childProfileId <-+
+
+   THE RULE: childProfileId is NEVER read from the request.
+
+   Not from the body, not from the query string, not from the URL. It is
+   DERIVED from the session cookie every single time, by looking up the
+   profile that belongs to the authenticated user. A caller can send any
+   childProfileId they like and it is ignored, because nothing ever reads it.
+
+   That is a stronger guarantee than checking a supplied id against the
+   session: a check can be forgotten on one route out of ten, and that one
+   route is the vulnerability. Here there is no supplied value to forget to
+   check. The same reasoning the existing child-profile routes use -- "the
+   owner is ALWAYS taken from the session cookie" -- extended to the board.
+
+   Every query is then additionally scoped by childProfileId, so even a
+   correctly-guessed card _id belonging to another family matches nothing.
+   ========================================================================== */
+
+/*
+ * Middleware: finds the signed-in user's child profile and puts it on
+ * req.childProfile.
+ *
+ * Runs AFTER requireAuth, so req.user is already the authenticated user. This
+ * is the single place the user -> profile hop happens; every board route uses
+ * it, so none of them can get the association wrong individually.
+ *
+ * 404 rather than 401 when there is no profile: the caller IS signed in, they
+ * simply have not created a child yet. The frontend already sends people to
+ * the profile screen in that case.
+ */
+async function requireChildProfile(req, res, next) {
+    try {
+        const profile = await childProfiles.findOne({ userId: req.user._id });
+
+        if (!profile) {
+            return res.status(404).json({
+                success: false,
+                code: "NO_CHILD_PROFILE",
+                message: "Please create a child profile first."
+            });
+        }
+
+        req.childProfile = profile;
+        next();
+
+    } catch (error) {
+        console.log("Loading child profile failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Something went wrong. Please try again."
+        });
+    }
+}
+
+/*
+ * Parses a value that should be a MongoDB ObjectId.
+ *
+ * Returns null rather than throwing when it is not one. A malformed id in a
+ * URL is an ordinary client mistake (or a probe), and `new ObjectId("junk")`
+ * throws -- which would otherwise become a 500 and look like a server fault.
+ */
+function toObjectId(value) {
+    if (typeof value !== "string" || !ObjectId.isValid(value)) {
+        return null;
+    }
+    return new ObjectId(value);
+}
+
+/* A card's word and a folder's name share these limits. */
+const MAX_WORD_LENGTH = 40;
+const MAX_FOLDER_NAME_LENGTH = 40;
+
+/*
+ * Validates a media reference -- an image or audio URL.
+ *
+ * Deliberately NOT a full URL parser. Two shapes are allowed:
+ *
+ *   /cards/food/rice.jpg          a path served by the frontend today
+ *   https://bucket/rice.jpg       object storage, once uploads exist
+ *
+ * Anything else is refused, which is what keeps `javascript:` and `data:`
+ * out of a field that will end up in an <img src>. Storing one of those
+ * would turn a card into a script-injection vector on the child's board.
+ *
+ * null is always allowed and means "no media", which is the normal state for
+ * a core word and for every card's audio today.
+ */
+function validateMediaRef(value, field) {
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    if (typeof value !== "string" || !value.trim()) {
+        return { field, message: `${field} must be a URL, a path, or null.` };
+    }
+
+    const trimmed = value.trim();
+
+    if (trimmed.length > 512) {
+        return { field, message: `${field} is too long.` };
+    }
+
+    // A root-relative path, or an explicit https URL. Nothing else.
+    const isPath = trimmed.startsWith("/") && !trimmed.startsWith("//");
+    const isHttps = /^https:\/\/[^\s]+$/i.test(trimmed);
+
+    if (!isPath && !isHttps) {
+        return { field, message: `${field} must be a root-relative path or an https URL.` };
+    }
+
+    return null;
+}
+
+/*
+ * Shapes a folder document for the browser.
+ *
+ * An explicit field list, never the raw document. childProfileId is
+ * deliberately absent: the client has no use for it, and it is the one value
+ * that must never look like something a request may supply.
+ */
+function publicFolder(folder) {
+    return {
+        id: folder._id,
+        name: folder.name,
+        emoji: folder.emoji ?? null,
+        colorKey: folder.colorKey ?? null,
+        imageUrl: folder.imageUrl ?? null,
+        order: folder.order,
+        isDefault: Boolean(folder.isDefault),
+        createdAt: folder.createdAt,
+        updatedAt: folder.updatedAt
+    };
+}
+
+function publicCard(card) {
+    return {
+        id: card._id,
+        word: card.word,
+        folderId: card.folderId,
+        imageUrl: card.imageUrl ?? null,
+        audioUrl: card.audioUrl ?? null,
+        emoji: card.emoji ?? null,
+        order: card.order,
+        isCoreWord: Boolean(card.isCoreWord),
+        isDefault: Boolean(card.isDefault),
+        createdAt: card.createdAt,
+        updatedAt: card.updatedAt
+    };
+}
+
+/*
+ * Works out the `order` value for something appended to the end of a list.
+ *
+ * Reads the current highest and adds one step, so a new card lands after the
+ * existing ones. The gaps ORDER_STEP leaves are what let a future "move left"
+ * write a single document instead of renumbering the whole folder.
+ */
+async function nextOrder(collection, filter) {
+    const last = await collection
+        .find(filter)
+        .sort({ order: -1 })
+        .limit(1)
+        .toArray();
+
+    if (last.length === 0) {
+        return 0;
+    }
+
+    return (Number(last[0].order) || 0) + ORDER_STEP;
+}
+
+/*
+ * Returns the child's board, seeding the default set on first use.
+ *
+ * Seeding lives here rather than in the child-profile route on purpose: a
+ * profile created before this feature existed has no board, and putting the
+ * seed at the point of READING means those profiles get one the first time
+ * they open the board, with no migration script to remember to run.
+ *
+ * The duplicate-key catch is what makes it safe under concurrency. Two
+ * requests arriving together both see an empty board and both try to seed;
+ * the unique (childProfileId, key) index refuses the second, and error 11000
+ * is treated as success -- because the outcome we wanted, exactly one board,
+ * is what happened.
+ */
+async function loadOrSeedBoard(childProfileId) {
+    const filter = { childProfileId };
+
+    let [folderDocs, cardDocs] = await Promise.all([
+        folders.find(filter).sort({ order: 1 }).toArray(),
+        cards.find(filter).sort({ order: 1 }).toArray()
+    ]);
+
+    if (folderDocs.length === 0 && cardDocs.length === 0) {
+        try {
+            await seedBoardForChild({ folders, cards }, childProfileId);
+        } catch (error) {
+            if (error.code !== 11000) {
+                throw error;
+            }
+            // Another request seeded first -- the desired end state either way.
+        }
+
+        [folderDocs, cardDocs] = await Promise.all([
+            folders.find(filter).sort({ order: 1 }).toArray(),
+            cards.find(filter).sort({ order: 1 }).toArray()
+        ]);
+    }
+
+    return { folderDocs, cardDocs };
+}
+
+/* ==========================================================================
+   GET /api/card-images
+   The pictures a caregiver may choose from when editing a card.
+
+   TEMPORARY, and deliberately shaped so it is easy to replace.
+
+   Today it lists the images shipped with the app, by reading the folder they
+   live in. It returns the SAME shape a real gallery will -- a list of
+   { url, folder, name } -- so swapping in uploaded images later is a change
+   to this one function, not to the picker that consumes it.
+
+   It reads the directory rather than repeating the file names in code: a
+   hard-coded list is wrong the moment somebody adds a picture, and this is
+   meant to be thrown away, so it should not acquire a second copy of the
+   truth on its way out.
+   ========================================================================== */
+
+/*
+ * CARD_IMAGE_ROOT and toImageUrl are imported from boardData.js rather than
+ * repeated here, so the picker and the seeder can never disagree about where
+ * the pictures are or how a path is encoded. They did briefly disagree: this
+ * route built its URLs unencoded while the seeder encoded them, so a picked
+ * "wake up.jpeg" produced a path the browser could not load.
+ */
+
+/* Turns "rice" into "Rice", and "ice-cream" into "Ice cream", for a label the
+   caregiver reads. Only a display default -- the card keeps its own word. */
+function prettyImageName(fileName) {
+    const base = fileName.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+    return base.charAt(0).toUpperCase() + base.slice(1);
+}
+
+app.get("/api/card-images", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const images = [];
+
+        let folderNames;
+        try {
+            folderNames = await fs.readdir(CARD_IMAGE_ROOT, { withFileTypes: true });
+        } catch (readError) {
+            /*
+             * The folder is missing entirely. That is a deployment problem --
+             * on a server that hosts only the API, the frontend's public/
+             * folder may not be there at all. Report it as "no pictures"
+             * rather than a fault: the edit form still works, the caregiver
+             * simply has nothing to choose from.
+             */
+            console.log("Card image folder is not readable:", readError.message);
+            return res.status(200).json({ success: true, images: [] });
+        }
+
+        for (const entry of folderNames) {
+            if (!entry.isDirectory()) continue;
+
+            const folderPath = path.join(CARD_IMAGE_ROOT, entry.name);
+            const files = await fs.readdir(folderPath);
+
+            for (const file of files) {
+                // Only real picture formats, so a stray .txt or .DS_Store
+                // cannot end up offered as a card image.
+                if (!/\.(jpe?g|png|webp|gif|svg)$/i.test(file)) continue;
+
+                images.push({
+                    /*
+                     * The same root-relative form already stored in imageUrl,
+                     * so choosing a picture here produces a value the card
+                     * routes already accept and the board already renders.
+                     *
+                     * Built with the SAME encoder the seeder uses, so a
+                     * picked path is byte-identical to a seeded one. It must
+                     * be percent-encoded: names like "wake up.jpeg" and
+                     * "Food & Drink" contain spaces and ampersands, which end
+                     * the URL or start a query string when left raw -- the
+                     * picture then silently fails to load.
+                     */
+                    url: toImageUrl(entry.name, file),
+                    folder: entry.name,
+                    name: prettyImageName(file)
+                });
+            }
+        }
+
+        images.sort((a, b) =>
+            a.folder === b.folder ? a.name.localeCompare(b.name) : a.folder.localeCompare(b.folder)
+        );
+
+        return res.status(200).json({ success: true, images });
+
+    } catch (error) {
+        console.log("Listing card images failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not load the pictures. Please try again."
+        });
+    }
+});
+
+/* ==========================================================================
+   GET /api/board
+   The whole board in ONE request: every folder and every card for the
+   signed-in user's child.
+
+   One call rather than one per folder because the board is small (33
+   documents) and a child tapping into a folder should see it instantly, not
+   wait for a network round trip.
+   ========================================================================== */
+app.get("/api/board", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const { folderDocs, cardDocs } = await loadOrSeedBoard(req.childProfile._id);
+
+        return res.status(200).json({
+            success: true,
+            childProfileId: req.childProfile._id,
+            folders: folderDocs.map(publicFolder),
+            cards: cardDocs.map(publicCard)
+        });
+
+    } catch (error) {
+        console.log("Loading the board failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not load the board. Please try again."
+        });
+    }
+});
+
+/* ==========================================================================
+   FOLDERS
+   ========================================================================== */
+
+/* GET /api/folders -- this child's folders, in display order. */
+app.get("/api/folders", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const { folderDocs } = await loadOrSeedBoard(req.childProfile._id);
+
+        return res.status(200).json({
+            success: true,
+            folders: folderDocs.map(publicFolder)
+        });
+
+    } catch (error) {
+        console.log("Loading folders failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not load folders. Please try again."
+        });
+    }
+});
+
+/* POST /api/folders -- create one folder for this child. */
+app.post("/api/folders", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const { name, emoji, colorKey, imageUrl } = req.body || {};
+
+        if (typeof name !== "string" || !name.trim()) {
+            return res.status(400).json({
+                success: false,
+                field: "name",
+                message: "Please enter a folder name."
+            });
+        }
+
+        if (name.trim().length > MAX_FOLDER_NAME_LENGTH) {
+            return res.status(400).json({
+                success: false,
+                field: "name",
+                message: `A folder name must be ${MAX_FOLDER_NAME_LENGTH} characters or fewer.`
+            });
+        }
+
+        const imageProblem = validateMediaRef(imageUrl, "imageUrl");
+        if (imageProblem) {
+            return res.status(400).json({ success: false, ...imageProblem });
+        }
+
+        const now = new Date();
+        const childProfileId = req.childProfile._id;
+
+        const doc = {
+            childProfileId,
+            /*
+             * A generated key, so a caregiver's folder can never collide with
+             * a default one and the unique index stays meaningful.
+             */
+            key: `custom-${new ObjectId().toString()}`,
+            name: name.trim(),
+            emoji: typeof emoji === "string" && emoji.trim() ? emoji.trim() : null,
+            colorKey: typeof colorKey === "string" && colorKey.trim() ? colorKey.trim() : null,
+            imageUrl: imageUrl ? imageUrl.trim() : null,
+            order: await nextOrder(folders, { childProfileId }),
+            isDefault: false,
+            createdAt: now,
+            updatedAt: now
+        };
+
+        await folders.insertOne(doc);
+
+        return res.status(201).json({ success: true, folder: publicFolder(doc) });
+
+    } catch (error) {
+        console.log("Creating a folder failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not create the folder. Please try again."
+        });
+    }
+});
+
+/*
+ * PATCH /api/folders/:id -- rename, re-icon or reorder one folder.
+ *
+ * The filter carries childProfileId as well as _id, which is the ownership
+ * check: another family's folder id simply matches nothing and gets a 404.
+ * There is no separate "do you own this?" query that could be omitted.
+ */
+app.patch("/api/folders/:id", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const folderId = toObjectId(req.params.id);
+
+        if (!folderId) {
+            return res.status(404).json({ success: false, message: "Folder not found." });
+        }
+
+        const { name, emoji, colorKey, imageUrl, order } = req.body || {};
+        const updates = {};
+
+        if (name !== undefined) {
+            if (typeof name !== "string" || !name.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    field: "name",
+                    message: "Please enter a folder name."
+                });
+            }
+            if (name.trim().length > MAX_FOLDER_NAME_LENGTH) {
+                return res.status(400).json({
+                    success: false,
+                    field: "name",
+                    message: `A folder name must be ${MAX_FOLDER_NAME_LENGTH} characters or fewer.`
+                });
+            }
+            updates.name = name.trim();
+        }
+
+        if (emoji !== undefined) {
+            updates.emoji = typeof emoji === "string" && emoji.trim() ? emoji.trim() : null;
+        }
+
+        if (colorKey !== undefined) {
+            updates.colorKey =
+                typeof colorKey === "string" && colorKey.trim() ? colorKey.trim() : null;
+        }
+
+        if (imageUrl !== undefined) {
+            const imageProblem = validateMediaRef(imageUrl, "imageUrl");
+            if (imageProblem) {
+                return res.status(400).json({ success: false, ...imageProblem });
+            }
+            updates.imageUrl = imageUrl ? imageUrl.trim() : null;
+        }
+
+        /* Reordering: the caller supplies the new position outright. This is
+           what a future "move up" button writes -- one field, one document. */
+        if (order !== undefined) {
+            if (!Number.isFinite(Number(order))) {
+                return res.status(400).json({
+                    success: false,
+                    field: "order",
+                    message: "order must be a number."
+                });
+            }
+            updates.order = Number(order);
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Nothing to update."
+            });
+        }
+
+        updates.updatedAt = new Date();
+
+        const result = await folders.findOneAndUpdate(
+            // Scoped to THIS child -- the ownership check.
+            { _id: folderId, childProfileId: req.childProfile._id },
+            { $set: updates },
+            { returnDocument: "after" }
+        );
+
+        if (!result) {
+            return res.status(404).json({ success: false, message: "Folder not found." });
+        }
+
+        return res.status(200).json({ success: true, folder: publicFolder(result) });
+
+    } catch (error) {
+        console.log("Updating a folder failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not update the folder. Please try again."
+        });
+    }
+});
+
+/*
+ * DELETE /api/folders/:id
+ *
+ * The cards inside it are NOT deleted. They are moved to the core-word area
+ * (folderId: null) instead, because a caregiver deleting a folder is tidying
+ * their categories, not asking to destroy twenty words a child relies on.
+ * Deleting a card is its own explicit action.
+ */
+app.delete("/api/folders/:id", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const folderId = toObjectId(req.params.id);
+
+        if (!folderId) {
+            return res.status(404).json({ success: false, message: "Folder not found." });
+        }
+
+        const childProfileId = req.childProfile._id;
+
+        const deleted = await folders.findOneAndDelete({ _id: folderId, childProfileId });
+
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: "Folder not found." });
+        }
+
+        /* Same childProfileId scope, so this can only ever touch this child. */
+        const moved = await cards.updateMany(
+            { childProfileId, folderId },
+            { $set: { folderId: null, updatedAt: new Date() } }
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: "Folder deleted.",
+            cardsMovedOut: moved.modifiedCount
+        });
+
+    } catch (error) {
+        console.log("Deleting a folder failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not delete the folder. Please try again."
+        });
+    }
+});
+
+/* ==========================================================================
+   CARDS
+   ========================================================================== */
+
+/* GET /api/cards -- every card for this child, in order. */
+app.get("/api/cards", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const { cardDocs } = await loadOrSeedBoard(req.childProfile._id);
+
+        return res.status(200).json({
+            success: true,
+            cards: cardDocs.map(publicCard)
+        });
+
+    } catch (error) {
+        console.log("Loading cards failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not load cards. Please try again."
+        });
+    }
+});
+
+/*
+ * GET /api/folders/:folderId/cards -- the cards inside one folder.
+ *
+ * `core` is accepted as the folderId to mean "the cards in no folder", since
+ * a URL cannot carry null. That is the eight core words.
+ */
+app.get("/api/folders/:folderId/cards", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const childProfileId = req.childProfile._id;
+        const raw = req.params.folderId;
+
+        let folderId;
+
+        if (raw === "core") {
+            folderId = null;
+        } else {
+            folderId = toObjectId(raw);
+            if (!folderId) {
+                return res.status(404).json({ success: false, message: "Folder not found." });
+            }
+
+            /* Confirm the folder is this child's before returning anything
+               from it, so an unknown id cannot be probed for existence. */
+            const folder = await folders.findOne({ _id: folderId, childProfileId });
+            if (!folder) {
+                return res.status(404).json({ success: false, message: "Folder not found." });
+            }
+        }
+
+        const cardDocs = await cards
+            .find({ childProfileId, folderId })
+            .sort({ order: 1 })
+            .toArray();
+
+        return res.status(200).json({
+            success: true,
+            cards: cardDocs.map(publicCard)
+        });
+
+    } catch (error) {
+        console.log("Loading folder cards failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not load cards. Please try again."
+        });
+    }
+});
+
+/* POST /api/cards -- add one card, optionally inside a folder. */
+app.post("/api/cards", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const { word, folderId, imageUrl, audioUrl, emoji } = req.body || {};
+        const childProfileId = req.childProfile._id;
+
+        if (typeof word !== "string" || !word.trim()) {
+            return res.status(400).json({
+                success: false,
+                field: "word",
+                message: "Please enter a word."
+            });
+        }
+
+        if (word.trim().length > MAX_WORD_LENGTH) {
+            return res.status(400).json({
+                success: false,
+                field: "word",
+                message: `A word must be ${MAX_WORD_LENGTH} characters or fewer.`
+            });
+        }
+
+        const imageProblem = validateMediaRef(imageUrl, "imageUrl");
+        if (imageProblem) {
+            return res.status(400).json({ success: false, ...imageProblem });
+        }
+
+        const audioProblem = validateMediaRef(audioUrl, "audioUrl");
+        if (audioProblem) {
+            return res.status(400).json({ success: false, ...audioProblem });
+        }
+
+        /*
+         * A card may be placed in a folder, or left in the core-word area.
+         * When a folder IS named it must belong to this child -- otherwise a
+         * caller could file a card into another family's folder, which would
+         * make it visible on their board.
+         */
+        let targetFolderId = null;
+
+        if (folderId !== undefined && folderId !== null) {
+            targetFolderId = toObjectId(folderId);
+            if (!targetFolderId) {
+                return res.status(400).json({
+                    success: false,
+                    field: "folderId",
+                    message: "That folder does not exist."
+                });
+            }
+
+            const folder = await folders.findOne({ _id: targetFolderId, childProfileId });
+            if (!folder) {
+                return res.status(404).json({
+                    success: false,
+                    field: "folderId",
+                    message: "That folder does not exist."
+                });
+            }
+        }
+
+        const now = new Date();
+
+        const doc = {
+            childProfileId,
+            key: `custom-${new ObjectId().toString()}`,
+            word: word.trim(),
+            folderId: targetFolderId,
+            imageUrl: imageUrl ? imageUrl.trim() : null,
+            audioUrl: audioUrl ? audioUrl.trim() : null,
+            emoji: typeof emoji === "string" && emoji.trim() ? emoji.trim() : null,
+            order: await nextOrder(cards, { childProfileId, folderId: targetFolderId }),
+            /* A caregiver's card is never a core word today. Core words are
+               the seeded eight; changing that is a later feature. */
+            isCoreWord: false,
+            isDefault: false,
+            createdAt: now,
+            updatedAt: now
+        };
+
+        await cards.insertOne(doc);
+
+        return res.status(201).json({ success: true, card: publicCard(doc) });
+
+    } catch (error) {
+        console.log("Creating a card failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not create the card. Please try again."
+        });
+    }
+});
+
+/*
+ * PATCH /api/cards/:id
+ *
+ * Covers everything Edit Words will need: change the word, replace the image
+ * or audio reference, MOVE the card to another folder, or reorder it. All of
+ * it without changing the card's _id, so a card keeps its identity.
+ */
+app.patch("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const cardId = toObjectId(req.params.id);
+
+        if (!cardId) {
+            return res.status(404).json({ success: false, message: "Card not found." });
+        }
+
+        const childProfileId = req.childProfile._id;
+        const { word, folderId, imageUrl, audioUrl, emoji, order } = req.body || {};
+        const updates = {};
+
+        if (word !== undefined) {
+            if (typeof word !== "string" || !word.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    field: "word",
+                    message: "Please enter a word."
+                });
+            }
+            if (word.trim().length > MAX_WORD_LENGTH) {
+                return res.status(400).json({
+                    success: false,
+                    field: "word",
+                    message: `A word must be ${MAX_WORD_LENGTH} characters or fewer.`
+                });
+            }
+            updates.word = word.trim();
+        }
+
+        if (imageUrl !== undefined) {
+            const problem = validateMediaRef(imageUrl, "imageUrl");
+            if (problem) {
+                return res.status(400).json({ success: false, ...problem });
+            }
+            updates.imageUrl = imageUrl ? imageUrl.trim() : null;
+        }
+
+        if (audioUrl !== undefined) {
+            const problem = validateMediaRef(audioUrl, "audioUrl");
+            if (problem) {
+                return res.status(400).json({ success: false, ...problem });
+            }
+            updates.audioUrl = audioUrl ? audioUrl.trim() : null;
+        }
+
+        if (emoji !== undefined) {
+            updates.emoji = typeof emoji === "string" && emoji.trim() ? emoji.trim() : null;
+        }
+
+        if (order !== undefined) {
+            if (!Number.isFinite(Number(order))) {
+                return res.status(400).json({
+                    success: false,
+                    field: "order",
+                    message: "order must be a number."
+                });
+            }
+            updates.order = Number(order);
+        }
+
+        /* MOVING BETWEEN FOLDERS. null moves the card to the core-word area;
+           any other value must be a folder belonging to THIS child. */
+        if (folderId !== undefined) {
+            if (folderId === null) {
+                updates.folderId = null;
+            } else {
+                const targetFolderId = toObjectId(folderId);
+                if (!targetFolderId) {
+                    return res.status(400).json({
+                        success: false,
+                        field: "folderId",
+                        message: "That folder does not exist."
+                    });
+                }
+
+                const folder = await folders.findOne({ _id: targetFolderId, childProfileId });
+                if (!folder) {
+                    return res.status(404).json({
+                        success: false,
+                        field: "folderId",
+                        message: "That folder does not exist."
+                    });
+                }
+
+                updates.folderId = targetFolderId;
+            }
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ success: false, message: "Nothing to update." });
+        }
+
+        updates.updatedAt = new Date();
+
+        const result = await cards.findOneAndUpdate(
+            { _id: cardId, childProfileId },
+            { $set: updates },
+            { returnDocument: "after" }
+        );
+
+        if (!result) {
+            return res.status(404).json({ success: false, message: "Card not found." });
+        }
+
+        return res.status(200).json({ success: true, card: publicCard(result) });
+
+    } catch (error) {
+        console.log("Updating a card failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not update the card. Please try again."
+        });
+    }
+});
+
+/* DELETE /api/cards/:id */
+app.delete("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const cardId = toObjectId(req.params.id);
+
+        if (!cardId) {
+            return res.status(404).json({ success: false, message: "Card not found." });
+        }
+
+        const deleted = await cards.findOneAndDelete({
+            _id: cardId,
+            childProfileId: req.childProfile._id
+        });
+
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: "Card not found." });
+        }
+
+        return res.status(200).json({ success: true, message: "Card deleted." });
+
+    } catch (error) {
+        console.log("Deleting a card failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not delete the card. Please try again."
         });
     }
 });

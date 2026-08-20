@@ -384,23 +384,23 @@
   margin-inline: calc(var(--pop-room) * -1);
 }
 
-/*
-   WHILE A CARD IS FLYING TO THE CENTRE.
+/* --------------------------------------------------------------------------
+   CARD AREA SIZING
 
-   The tapped card travels up to ~485px from a far corner, which no amount of
-   padding can accommodate -- and the container clips vertically too. So the
-   board drops its clipping entirely for the 560ms of the animation.
+   These variables decide the size of every card: the gap, the column width
+   the grid will actually produce, and the row height derived from it.
 
-   `visible` on both axes is required: setting only one leaves the other
-   computing to auto, which still clips. Scrolling is suspended for that
-   moment, which is unnoticeable and stops the scroll position jumping while
-   a card is out of place.
+   THEY USED TO LIVE ON .cboard__cards--popping, a class that was only present
+   WHILE A CARD WAS BEING TAPPED. That is why card dimensions were
+   inconsistent: --rowh, and therefore every card's height, existed only
+   during the tap animation and was undefined the rest of the time, so rows
+   fell back to sizing themselves from their content -- which is exactly the
+   "image and text change the card height" symptom.
 
-   The class is set by CommunicationBoard.jsx and removed when the animation
-   finishes, so the normal scrolling behaviour returns immediately.
-*/
-.cboard__cards--popping {
-  overflow: visible;
+   They now sit on the card area itself, unconditionally, so every card in a
+   grid mode has identical dimensions at all times.
+   -------------------------------------------------------------------------- */
+.cboard__cards {
 
   /*
      Room for the last row's shadow, so it is not clipped mid-scroll.
@@ -533,6 +533,69 @@
 }
 
 /* --------------------------------------------------------------------------
+   LOADING AND ERROR
+
+   Shown in place of the grid while the board is being fetched, or if the
+   fetch failed. They sit INSIDE the scrolling card area, so the sentence bar
+   and the toolbar never move -- the screen does not jump when the board
+   arrives.
+
+   --color-ink, not --color-on-tint: these sit on the themed page background
+   rather than on a coloured card, so they must follow the theme. (Using
+   --color-on-tint here would be the fixed-dark-on-themed-fill mistake that
+   made the Settings button vanish in dark mode.)
+   -------------------------------------------------------------------------- */
+.cboard__status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 2vh, 20px);
+  /* Fills the card area so the message is centred where the cards would be,
+     rather than clinging to the top edge. */
+  min-height: min(100%, clamp(160px, 34vh, 340px));
+  padding: clamp(16px, 3vh, 32px);
+  text-align: center;
+}
+
+.cboard__status-text {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(1rem, 2.2vh, 1.35rem);
+  line-height: 1.4;
+  color: var(--color-ink);
+  max-width: 34ch;
+}
+
+/*
+   Try again. Built from the same parts as the board's other buttons -- the
+   display font, a dark border, the offset shadow -- so it belongs to the same
+   interface rather than looking like a browser default.
+*/
+.cboard__status-btn {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1rem, 2.2vh, 1.3rem);
+  color: var(--color-on-tint);
+  background: #f4f1ec;
+  border: 4px solid var(--color-on-tint);
+  border-radius: clamp(14px, 2.2vh, 20px);
+  /* Comfortably past the 44px touch minimum, like every other control. */
+  min-height: clamp(52px, 6.4vh, 68px);
+  padding: 0 clamp(20px, 3vw, 34px);
+  box-shadow: 0 5px 0 rgba(43, 43, 58, 0.18);
+  cursor: pointer;
+  transition: background-color 120ms ease-out, transform 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+.cboard__status-btn:active {
+  background: #e4e2de;
+  transform: scale(0.97);
+  box-shadow: 0 2px 0 rgba(43, 43, 58, 0.26);
+}
+
+/* --------------------------------------------------------------------------
    A communication card
    -------------------------------------------------------------------------- */
 /*
@@ -615,7 +678,15 @@
   box-shadow: 0 6px 0 rgba(43, 43, 58, 0.16);
   cursor: pointer;
 
-  transition: background-color 120ms ease-out, transform 120ms ease-out,
+  /*
+     transform is deliberately ABSENT from this transition list.
+
+     The tap animation owns `transform`. A transition on the same property
+     competes with the keyframes at the moment the class is applied, which is
+     half of why the animation read as a twitch instead of a grow. Background
+     and shadow still transition, so the pressed state stays soft.
+  */
+  transition: background-color 120ms ease-out,
     box-shadow 120ms ease-out;
 }
 
@@ -632,9 +703,22 @@
    away from its position and fought the pop animation that follows. Scaling
    keeps the card centred in its own cell throughout.
 */
+/*
+   The press-down state.
+
+   NOTE WHAT IS NOT HERE: `transform`.
+
+   The tap animation owns transform -- it is applied to a clone of this card
+   (see cardPressAnimation.js), and the real card must stay exactly where the
+   grid put it. A `scale(0.97)` here used to fight that animation: :active
+   applies from pointer-DOWN while the animation starts on pointer-UP, so the
+   card visibly shrank a moment before it was supposed to grow.
+
+   The pressed state is carried by COLOUR and SHADOW only, which say the same
+   thing without touching a property something else is animating.
+*/
 .ccard:active {
   background: var(--deep, #f0ece5);
-  transform: scale(0.97);
   box-shadow: 0 2px 0 rgba(43, 43, 58, 0.24);
 }
 
@@ -810,138 +894,19 @@
    distraction, and without delaying the word appearing in the sentence.
 */
 /*
-   Tap feedback: the card swells in place and settles back.
+   The card press animation is NOT in this stylesheet.
 
-   SCALE ONLY -- no translate. An earlier version added translateY(-4px),
-   which lifted the card towards the sentence bar and read as the card
-   travelling there. A pure scale grows the card around its own centre, so it
-   never leaves its grid cell.
+   It moves a card from its grid position to the middle of the visible board
+   and back, and the distance is different for every card and only known at
+   the moment of the tap -- which a static @keyframes block cannot express.
+   It is built with the Web Animations API instead, on a temporary CLONE of
+   the card rendered outside the grid: see cardPressAnimation.js.
 
-   Because scale is a transform it is painted, not laid out: the cell keeps
-   its exact size and the surrounding cards never move. The card returns to
-   scale(1), which is its natural size, so the end state is identical to the
-   start.
+   The clone is why nothing here needs to change for it. The real card is
+   never transformed, so no rule below has to make room for one that is.
 */
-@keyframes ccard-pop {
-  /*
-     EASING IS PER-SEGMENT, declared inside the keyframes.
 
-     A single cubic-bezier on the shorthand is applied to EVERY segment
-     separately, and an aggressive curve then reaches most of its travel in
-     the first few milliseconds -- which is what made an earlier version snap
-     rather than move. Each stop below carries its own curve instead, and the
-     shorthand is linear so it does not override them.
 
-     --dx / --dy are measured in JS at tap time: the distance from this
-     card's centre to the centre of the card area. Every card therefore
-     travels its own distance, and a card already near the middle barely
-     moves.
-
-     translate comes BEFORE scale in the transform list, so the card is moved
-     first and then grown about its new position.
-  */
-  0% {
-    transform: translate(0, 0) scale(1);
-    box-shadow: 0 6px 0 rgba(43, 43, 58, 0.16);
-    filter: brightness(1);
-    animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1);
-  }
-
-  /* A third of the way across, already growing. */
-  22% {
-    transform: translate(calc(var(--dx, 0px) * 0.38), calc(var(--dy, 0px) * 0.38))
-      scale(1.22);
-    box-shadow: 0 14px 28px rgba(43, 43, 58, 0.3);
-    filter: brightness(1.04);
-    animation-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
-  }
-
-  /* Arrived at the centre, at full size. */
-  42% {
-    transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(1.55);
-    box-shadow: 0 24px 48px rgba(43, 43, 58, 0.44);
-    filter: brightness(1.07);
-    animation-timing-function: linear;
-  }
-
-  /* Holds in the middle so the card is genuinely read. */
-  62% {
-    transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(1.55);
-    box-shadow: 0 24px 48px rgba(43, 43, 58, 0.44);
-    filter: brightness(1.07);
-    animation-timing-function: cubic-bezier(0.4, 0, 0.4, 1);
-  }
-
-  /* On the way home, shrinking as it goes. */
-  82% {
-    transform: translate(calc(var(--dx, 0px) * 0.34), calc(var(--dy, 0px) * 0.34))
-      scale(1.2);
-    box-shadow: 0 12px 24px rgba(43, 43, 58, 0.26);
-    filter: brightness(1.03);
-    animation-timing-function: cubic-bezier(0.3, 0, 0.2, 1);
-  }
-
-  /*
-     Back to exactly the resting state: zero translation, scale 1, the same
-     shadow and brightness as 0%. The card ends precisely in its own grid
-     cell, whatever distance it travelled.
-  */
-  100% {
-    transform: translate(0, 0) scale(1);
-    box-shadow: 0 6px 0 rgba(43, 43, 58, 0.16);
-    filter: brightness(1);
-  }
-}
-
-/*
-   The confirmation shown for a moment AFTER the finger lifts: the card
-   darkens to its deep tone and keeps a coral rim, so the tap is obvious even
-   if the press itself was brief.
-*/
-.ccard--tapped {
-  /*
-     480ms: the card grows, HOLDS at full size, then shrinks back, and the
-     word follows. Long enough for a child to see the enlarged card properly;
-     short enough that building a sentence does not feel slow. The component
-     listens for THIS animation ending, so the timing stays in step
-     automatically if the duration is ever changed here.
-
-     `linear` HERE is deliberate and is not the same as a linear animation.
-     Each keyframe declares its own animation-timing-function, and this
-     shorthand value is only the default for any segment that does not. A
-     curve here would be re-applied to every segment separately, which is
-     exactly what made the motion snap.
-
-     1000ms total: grow (0-42%), hold (42-62%), return (62-100%).
-
-     A full second, so the travel to the centre is unhurried and a child has
-     time to follow the card with their eyes. The percentages are unchanged,
-     so every phase stretches proportionally -- 420ms out, 200ms holding in
-     the middle, 380ms back.
-
-     This is about the practical ceiling: the word only reaches the sentence
-     bar when the animation ends, so a longer hold would start to feel like a
-     lag while building a sentence.
-
-     No box-shadow of its own -- the keyframes animate it, and a static value
-     here would override them and flatten the depth effect.
-  */
-  animation: ccard-pop 1000ms linear;
-  background: var(--deep, var(--color-cream-warm));
-  /* The coral rim is a momentary flash on tap, not a permanent edge, so it
-     does not add to the standing visual noise. */
-  border-color: var(--color-coral);
-
-  /*
-     Lifts the card above its neighbours WHILE IT GROWS.
-     Grid items paint in source order, so without this a card to the right or
-     below would draw over the enlarged edges and clip the effect. Both
-     properties apply only for the 360ms the class is present, so the card's
-     normal stacking is unchanged.
-  */
-  position: relative;
-  z-index: 3;
-}
 
 /* --------------------------------------------------------------------------
    Category folders
@@ -1418,31 +1383,6 @@
    child's confirmation that the card registered.
    ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
-  /*
-     NOT `animation: none`.
-
-     The word is added when this animation ends, so removing it entirely
-     would mean the animationend event never fires and a child using reduced
-     motion could never build a sentence at all.
-
-     Instead the animation still runs, but almost instantly and without the
-     scaling: a brief colour flash confirms the tap, the event still fires,
-     and there is effectively no motion.
-  */
-  .ccard--tapped {
-    animation: ccard-pop-still 120ms linear;
-  }
-
-  /* Motion-free equivalent: no scale at all, just enough duration for the
-     animationend event that adds the word. */
-  @keyframes ccard-pop-still {
-    from {
-      transform: none;
-    }
-    to {
-      transform: none;
-    }
-  }
 
   .ccard,
   .cbtn,
@@ -1880,3 +1820,250 @@
     transition: none;
   }
 }
+
+/* ==========================================================================
+   EDIT WORDS
+
+   The edit flow reuses the Settings panel wholesale -- .cpanel for the frame,
+   .cset__row for a list row. Only what is genuinely new is defined here: a
+   text field, folder chips, and the picture gallery.
+
+   COLOURS: every value is a theme token, and each pairing follows one already
+   proven elsewhere in this file (--color-ink on --color-surface, as
+   .cset__option uses). Both sides of every pair follow the theme, so nothing
+   here can become invisible in dark mode.
+   ========================================================================== */
+
+.cedit__form {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(16px, 2.4vh, 26px);
+}
+
+.cedit__field {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1vh, 10px);
+}
+
+.cedit__label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1rem, 2.1vh, 1.25rem);
+  color: var(--color-ink);
+}
+
+.cedit__input {
+  font-family: var(--font-body);
+  font-size: clamp(1.05rem, 2.3vh, 1.4rem);
+  color: var(--color-ink);
+  background: var(--color-surface);
+  border: 4px solid var(--color-ink);
+  border-radius: clamp(12px, 2vh, 18px);
+  /* Comfortably past the 44px touch minimum, like every other control. */
+  min-height: clamp(54px, 6.6vh, 70px);
+  padding: 0 clamp(12px, 2vw, 18px);
+  width: 100%;
+}
+
+/* The folder choices, as wrapping chips rather than a <select>: a native
+   dropdown is small, hard to hit, and styles inconsistently across
+   platforms -- all three matter on a tablet used one-handed. */
+.cedit__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: clamp(8px, 1.2vh, 12px);
+}
+
+.cedit__chip {
+  font-family: var(--font-body);
+  font-size: clamp(0.95rem, 2vh, 1.15rem);
+  color: var(--color-ink);
+  background: var(--color-surface);
+  border: 3px solid var(--color-ink);
+  border-radius: 999px;
+  min-height: clamp(48px, 5.8vh, 60px);
+  padding: 0 clamp(14px, 2vw, 20px);
+  cursor: pointer;
+  transition: background-color 120ms ease-out, transform 90ms ease-out;
+}
+
+.cedit__chip--on {
+  background: var(--color-selected);
+  transform: translateY(2px);
+}
+
+/* The current picture, and the way into the gallery. */
+.cedit__picture {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2vw, 18px);
+  font-family: var(--font-body);
+  font-size: clamp(1rem, 2.1vh, 1.2rem);
+  color: var(--color-ink);
+  background: var(--color-surface);
+  border: 4px solid var(--color-ink);
+  border-radius: clamp(12px, 2vh, 18px);
+  padding: clamp(10px, 1.4vh, 14px);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.cedit__picture-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+   A thumbnail. Fixed size with object-fit: contain, for the same reason the
+   cards use it -- the images vary from 235x333 to 1200x800, and the frame
+   must not change shape with the picture.
+*/
+.cedit__thumb {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  width: clamp(48px, 6vh, 62px);
+  height: clamp(48px, 6vh, 62px);
+  border-radius: clamp(8px, 1.4vh, 12px);
+  background: var(--color-cream-warm);
+}
+
+.cedit__thumb--lg {
+  width: clamp(64px, 8vh, 88px);
+  height: clamp(64px, 8vh, 88px);
+}
+
+.cedit__thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
+
+.cedit__thumb-emoji {
+  font-size: clamp(1.4rem, 3vh, 2rem);
+  line-height: 1;
+}
+
+/* The picture gallery: a responsive grid that reflows from phone to desktop
+   without a breakpoint, since the item size is what decides the count. */
+.cedit__gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(96px, 14vw, 140px), 1fr));
+  gap: clamp(10px, 1.6vh, 16px);
+}
+
+.cedit__galleryitem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-surface);
+  border: 3px solid var(--color-ink);
+  border-radius: clamp(10px, 1.8vh, 16px);
+  padding: clamp(8px, 1.2vh, 12px);
+  cursor: pointer;
+  transition: background-color 120ms ease-out, transform 90ms ease-out;
+}
+
+.cedit__galleryitem--on {
+  background: var(--color-selected);
+  transform: translateY(2px);
+}
+
+.cedit__galleryimg {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+}
+
+.cedit__galleryname {
+  font-family: var(--font-body);
+  font-size: clamp(0.8rem, 1.7vh, 0.98rem);
+  color: var(--color-ink);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* Save and Cancel. */
+.cedit__actions {
+  display: flex;
+  gap: clamp(10px, 1.6vw, 16px);
+}
+
+.cedit__btn {
+  flex: 1;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1rem, 2.2vh, 1.25rem);
+  border: 4px solid var(--color-ink);
+  border-radius: clamp(12px, 2vh, 18px);
+  min-height: clamp(54px, 6.6vh, 70px);
+  cursor: pointer;
+  transition: background-color 120ms ease-out, transform 90ms ease-out;
+}
+
+.cedit__btn--cancel {
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+
+.cedit__btn--save {
+  background: var(--color-selected);
+  color: var(--color-ink);
+}
+
+.cedit__btn:active {
+  transform: translateY(2px);
+}
+
+/*
+   Disabled while saving. A COLOUR change, not opacity: opacity composites the
+   whole subtree and would fade the text along with the fill, which is the
+   mistake already flagged elsewhere in this project.
+*/
+.cedit__btn:disabled {
+  background: var(--color-cream-warm);
+  color: var(--color-muted-text);
+  cursor: default;
+  transform: none;
+}
+
+.cedit__error {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.95rem, 2vh, 1.12rem);
+  line-height: 1.4;
+  /* The one text colour in the palette that is BOTH a warning hue and
+     readable -- 6.0:1 on cream. The bright coral is shapes-only. */
+  color: var(--color-coral-text);
+}
+
+.cedit__hint {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.95rem, 2vh, 1.15rem);
+  color: var(--color-muted-text);
+  text-align: center;
+  padding: clamp(16px, 3vh, 30px) 0;
+}
+
+/* ==========================================================================
+   PRESS ANIMATION
+
+   Deliberately absent from this file.
+
+   The strength of the animation (how far the card travels, how much it grows,
+   how long it takes) is chosen per grid size in cardPressAnimation.js, which
+   reads the grid-size class from the card area. Keeping it there rather than
+   in CSS variables means the travel distance -- which must be measured at tap
+   time -- and the size it grows to live together, instead of half here and
+   half in JavaScript.
+   ========================================================================== */

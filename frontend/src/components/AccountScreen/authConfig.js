@@ -17,12 +17,21 @@
 /*
  * Where the Express backend lives.
  *
- * Kept as a named constant rather than typed inline, because it changes when
- * the app is deployed. Later this can read an environment variable
- * (import.meta.env.VITE_API_URL) so development and production differ without
- * editing the code.
+ * Read from the environment, falling back to the local dev server. Vite
+ * replaces import.meta.env.VITE_API_URL at BUILD time, so a deployment sets
+ * it in the build environment and the same source produces a build that
+ * points at the real API -- no code edit, and no localhost baked into a
+ * production bundle.
+ *
+ * Only the base URL lives here. It is a public address, not a secret: it ends
+ * up in the JavaScript the browser downloads either way. Nothing sensitive --
+ * no MongoDB URI, no Google client secret, no SMTP credential -- is ever read
+ * on the frontend; those stay in backend/.env, which the browser never sees.
+ *
+ * The fallback keeps `npm run dev` working with no .env file at all, which is
+ * how the project has run until now.
  */
-export const API_BASE_URL = 'http://localhost:5000'
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
 /*
  * A deliberately forgiving email check: something, an @, something, a dot,

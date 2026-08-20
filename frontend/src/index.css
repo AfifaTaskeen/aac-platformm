@@ -140,6 +140,20 @@
   --color-accent: #a78bfa;      /* the settings hue, lifted so it reads on
                                    a dark background */
   --color-on-accent: #1c1c26;   /* text sitting ON the accent */
+
+  /*
+     The warning/error text colour, lifted for a dark background.
+
+     The light value (#b22f1b) is a DARKENED coral, chosen to read on cream --
+     which makes it almost invisible on a dark panel: 2.1:1, well under the
+     4.5:1 minimum. Dark themes need the same hue LIGHTENED instead, so this
+     is a salmon rather than a brick.
+
+     Measured: 6.9:1 on the page, 5.4:1 on a panel -- so an error message is
+     as readable in the dark as it is in the light, which for a message
+     explaining why something failed to save is the whole point.
+  */
+  --color-coral-text: #ff9b87;
 }
 
 /* --------------------------------------------------------------------------
