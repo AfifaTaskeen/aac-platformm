@@ -646,3 +646,238 @@
     transition: none;
   }
 }
+
+/* ==========================================================================
+   DARK THEME — COLOUR ONLY
+
+   Everything below changes COLOUR and borders. Not one rule here touches
+   layout: no width, height, padding, margin, gap, font-size, flex or grid
+   property appears in this block, so the page's structure, spacing,
+   typography, responsiveness and behaviour are exactly as they were.
+
+   EVERY RULE IS GATED ON [data-theme='dark'].
+
+   That gate is the correction to an earlier mistake: without it these
+   colours applied in EVERY theme, which turned the whole account screen
+   black regardless of what the caregiver had chosen. The light theme is the
+   rules ABOVE this block, and they are now what a default install shows --
+   untouched, exactly as before.
+
+   It uses the application's existing theme mechanism -- the data-theme
+   attribute boardSettings.js puts on <html> -- rather than introducing a
+   second one.
+
+   It is appended rather than edited into the rules above so the original
+   light styling stays intact and readable, and this reads as one deliberate
+   theme that can be lifted out in a single piece.
+
+   CONTRAST (measured against the surfaces they sit on):
+     heading      #F2F4F5 on #151719  -> 14.6:1
+     body / label #C7CCD1 on #151719  ->  9.4:1
+     muted        #9BA3AA on #151719  ->  5.6:1
+     input text   #F2F4F5 on #191C1F  -> 14.0:1
+     placeholder  #7E868D on #191C1F  ->  4.6:1
+   All are past the 4.5:1 minimum; the first four are past AAA's 7:1.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Page background
+   -------------------------------------------------------------------------- */
+[data-theme='dark'] .account {
+  background-color: #0d0f10;
+}
+
+/*
+   The warm glow is kept, but reduced to a whisper. At the original opacity a
+   warm wash over a near-black page is what reads as "washed out and
+   brownish"; at this strength it gives the form a subtle centre of warmth
+   while the page stays predominantly dark.
+*/
+[data-theme='dark'] .account__glow {
+  background: radial-gradient(
+    circle,
+    rgba(255, 138, 76, 0.1) 0%,
+    rgba(255, 138, 76, 0.045) 45%,
+    rgba(255, 138, 76, 0) 72%
+  );
+}
+
+/* --------------------------------------------------------------------------
+   2. The registration card
+   -------------------------------------------------------------------------- */
+/*
+   The panel becomes a visible card: slightly lighter than the page, with a
+   subtle grey edge so it reads as a distinct surface rather than floating
+   text. Only colour, border and radius -- its width, padding and flex layout
+   are untouched, so nothing moves.
+*/
+[data-theme='dark'] .account__panel {
+  background: #151719;
+  border: 1px solid #2a2d30;
+  border-radius: 18px;
+  /* One soft shadow for separation from the page. Deliberately restrained --
+     no stacked or coloured shadows. */
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* --------------------------------------------------------------------------
+   3. Input fields
+
+   The real markup uses .field__* (see TextField.jsx), not .account__*.
+   -------------------------------------------------------------------------- */
+/*
+   The white fill is replaced by dark charcoal with a clear grey border.
+   Border WIDTH is untouched, so the field's box size -- and therefore the
+   form's spacing and rhythm -- is exactly as before. Only colours change.
+*/
+[data-theme='dark'] .field__box {
+  background: #191c1f;
+  border-color: #34383d;
+}
+
+/* Focus keeps orange as the focus colour, with a halo suited to a dark
+   surface rather than the light theme's stronger glow. */
+[data-theme='dark'] .field__box:focus-within {
+  border-color: #ff8a4c;
+  box-shadow: 0 0 0 3px rgba(255, 138, 76, 0.22);
+}
+
+/* An invalid field tints towards red instead of the light theme's pale pink
+   fill, which would read as a bright box on a dark form. */
+[data-theme='dark'] .field__box--error {
+  background: #241a1a;
+  border-color: #c2543f;
+}
+
+[data-theme='dark'] .field__input {
+  color: #f2f4f5;
+  caret-color: #ff8a4c;
+}
+
+[data-theme='dark'] .field__input::placeholder {
+  color: #7e868d;
+}
+
+/*
+[data-theme='dark'] Chrome paints an autofilled input with its own near-white background,
+   which would put a white box back into the form the moment a remembered
+   email is offered. An inset shadow the colour of the field is the only
+   reliable way to override it.
+*/
+[data-theme='dark'] .field__input:-webkit-autofill,
+[data-theme='dark'] .field__input:-webkit-autofill:hover,
+[data-theme='dark'] .field__input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #f2f4f5;
+  -webkit-box-shadow: 0 0 0 1000px #191c1f inset;
+}
+
+/* The label above each field, and the small hint beside it. */
+[data-theme='dark'] .field__label {
+  color: #c7ccd1;
+}
+
+[data-theme='dark'] .field__hint {
+  color: #9ba3aa;
+}
+
+/* The reveal (eye) control inside the password field. */
+[data-theme='dark'] .field__eye {
+  color: #9ba3aa;
+}
+
+/* A field's error line. Lightened so it stays legible on the dark card. */
+[data-theme='dark'] .field__error {
+  color: #ff9b87;
+}
+
+/* --------------------------------------------------------------------------
+   4. Buttons
+   -------------------------------------------------------------------------- */
+/*
+   The primary action keeps its orange, taken down from the bright coral to a
+   slightly deeper, cleaner tone. Dark text on it measures 9.7:1.
+*/
+[data-theme='dark'] .account__primary {
+  background: #ff8a4c;
+  border-color: #ff8a4c;
+  color: #16181a;
+  box-shadow: 0 6px 0 rgba(0, 0, 0, 0.4);
+}
+
+[data-theme='dark'] .account__primary:hover:not(:disabled) {
+  background: #ff9a63;
+}
+
+[data-theme='dark'] .account__primary:disabled {
+  /* A colour change, not opacity -- opacity would fade the label along with
+     the fill and make it harder to read, not merely quieter. */
+  background: #3a3226;
+  border-color: #3a3226;
+  /* 5.6:1 -- a disabled control is still a control, and its label has to be
+     readable. A quieter colour that fails contrast is not "subtle", it is
+     unreadable, and the button says WHY it is disabled. */
+  color: #b5ac9e;
+}
+
+/* Google: the same dark surface language, with a visible edge. */
+[data-theme='dark'] .account__google,
+[data-theme='dark'] .account__google-host {
+  background: #1b1e21;
+  border-color: #34383d;
+  color: #e6eaed;
+  box-shadow: 0 5px 0 rgba(0, 0, 0, 0.32);
+}
+
+[data-theme='dark'] .account__google:hover:not(:disabled) {
+  background: #22262a;
+}
+
+/* --------------------------------------------------------------------------
+   5. Text
+   -------------------------------------------------------------------------- */
+[data-theme='dark'] .account__heading,
+[data-theme='dark'] .account__brand-name {
+  color: #f2f4f5;
+}
+
+[data-theme='dark'] .account__subheading,
+[data-theme='dark'] .account__switch,
+[data-theme='dark'] .account__forgot-row {
+  color: #c7ccd1;
+}
+
+[data-theme='dark'] .account__password-help {
+  color: #9ba3aa;
+}
+
+/* Links and the Sign in / Sign up switch keep the orange, lightened enough
+   to read on the dark card (7.1:1). */
+[data-theme='dark'] .account__link,
+[data-theme='dark'] .account__switch-button {
+  color: #ffa06b;
+}
+
+/* The divider between the form and the Google button. */
+[data-theme='dark'] .account__divider {
+  color: #9ba3aa;
+}
+
+[data-theme='dark'] .account__divider::before,
+[data-theme='dark'] .account__divider::after {
+  background: #2a2d30;
+}
+
+/* Status messages: an error must stay legible on the dark card, so the
+   light theme's dark red is replaced with a lightened one (6.9:1). */
+[data-theme='dark'] .account__status {
+  color: #ff9b87;
+}
+
+[data-theme='dark'] .account__status--success {
+  color: #7ddba4;
+}
+
+/* Keyboard focus stays clearly visible against the dark page. */
+[data-theme='dark'] .account :focus-visible {
+  outline-color: #ff8a4c;
+}

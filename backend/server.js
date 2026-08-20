@@ -15,6 +15,8 @@ const nodemailer = require("nodemailer");
 const tts = require("./tts");
 /* The starting board a new child profile is given -- see boardData.js. */
 const { seedBoardForChild, ORDER_STEP, toImageUrl, CARD_IMAGE_ROOT } = require("./boardData");
+/* Caregiver-uploaded pictures and audio -- see uploads.js. */
+const uploads = require("./uploads");
 
 const app = express();
 
@@ -106,6 +108,35 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+/*
+ * Serves caregiver-uploaded pictures and audio.
+ *
+ * Mounted BEFORE express.json() would matter and before the API routes, so a
+ * request for /uploads/... is answered with the file and never falls through
+ * to a route.
+ *
+ * These are deliberately NOT behind requireAuth. An <img> or <audio> element
+ * cannot send a session cookie on a cross-origin request in every browser, so
+ * gating them would break the very thing they exist for. The filenames are 8
+ * random bytes, so a URL cannot be guessed, and nothing about a picture of a
+ * cup is sensitive in the way the database is. Access control lives on the
+ * DATA -- which card belongs to which child -- not on the bytes.
+ *
+ * `fallthrough: false` means a missing file returns 404 rather than
+ * continuing into the API routes and producing a confusing error.
+ */
+app.use(
+    uploads.UPLOAD_URL_PREFIX,
+    express.static(uploads.UPLOAD_ROOT, {
+        fallthrough: false,
+        // Uploaded media never changes once written -- the filename is unique
+        // per upload -- so it can be cached hard.
+        maxAge: "30d",
+        index: false,
+        dotfiles: "deny"
+    })
+);
 
 // Parses the Cookie header into req.cookies, so we can read the session back.
 app.use(cookieParser());
@@ -1654,6 +1685,77 @@ app.get("/api/card-images", requireAuth, requireChildProfile, async (req, res) =
 });
 
 /* ==========================================================================
+   UPLOADS
+
+   POST /api/uploads/image
+   POST /api/uploads/audio
+
+   Take one file as multipart/form-data and return { url }. The caller then
+   PATCHes or POSTs that url into a card's imageUrl / audioUrl, so uploading
+   and saving stay separate steps -- a caregiver can pick a picture, see it,
+   and still cancel without having changed the card.
+
+   The bytes are written to disk (backend/uploads) and NEVER into MongoDB;
+   see uploads.js for why, and for the abstraction that lets this become
+   object storage later.
+   ========================================================================== */
+
+/* Turns an upload error into a message a caregiver can act on. */
+function uploadErrorResponse(error, kind) {
+    const limitMb = Math.round(
+        (kind === "image" ? uploads.MAX_IMAGE_BYTES : uploads.MAX_AUDIO_BYTES) / (1024 * 1024)
+    );
+
+    switch (error.code) {
+        case "TOO_LARGE":
+            return {
+                status: 413,
+                message: `That file is too big. Please choose one under ${limitMb}MB.`
+            };
+        case "UNSUPPORTED_TYPE":
+            return {
+                status: 415,
+                message:
+                    kind === "image"
+                        ? "That file is not a picture we can use. Please choose a JPG, PNG, WebP or GIF."
+                        : "That file is not audio we can use. Please choose an MP3, WAV, M4A or OGG."
+            };
+        case "NO_FILE":
+            return { status: 400, message: "No file was received. Please choose a file." };
+        case "NOT_MULTIPART":
+            return { status: 400, message: "The upload was malformed. Please try again." };
+        default:
+            return { status: 500, message: "Could not save that file. Please try again." };
+    }
+}
+
+function makeUploadRoute(kind) {
+    return async (req, res) => {
+        try {
+            const result = await uploads.handleUpload(req, kind, req.childProfile._id);
+
+            return res.status(201).json({
+                success: true,
+                url: result.url,
+                bytes: result.bytes,
+                type: result.type
+            });
+        } catch (error) {
+            const { status, message } = uploadErrorResponse(error, kind);
+
+            if (status === 500) {
+                console.log(`Upload (${kind}) failed:`, error);
+            }
+
+            return res.status(status).json({ success: false, message });
+        }
+    };
+}
+
+app.post("/api/uploads/image", requireAuth, requireChildProfile, makeUploadRoute("image"));
+app.post("/api/uploads/audio", requireAuth, requireChildProfile, makeUploadRoute("audio"));
+
+/* ==========================================================================
    GET /api/board
    The whole board in ONE request: every folder and every card for the
    signed-in user's child.
@@ -1879,22 +1981,86 @@ app.delete("/api/folders/:id", requireAuth, requireChildProfile, async (req, res
 
         const childProfileId = req.childProfile._id;
 
+        /*
+         * The cards inside are read BEFORE anything is removed: once the
+         * folder is gone they could not be found by folderId, and their
+         * uploaded media could not be tidied up.
+         */
+        const inside = await cards.find({ childProfileId, folderId }).toArray();
+
+        /*
+         * PROTECTED WORDS.
+         *
+         * A folder holding one of the five quick-access core words cannot be
+         * deleted, because doing so would delete that word -- the same
+         * protection as the card route, applied to the route that could
+         * otherwise route around it.
+         */
+        const protectedCards = inside.filter((c) => c.isCoreWord);
+
+        if (protectedCards.length > 0) {
+            return res.status(409).json({
+                success: false,
+                code: "PROTECTED_CORE_WORD",
+                message:
+                    `This folder contains main core words (${protectedCards
+                        .map((c) => c.word)
+                        .join(", ")}) which cannot be deleted.`
+            });
+        }
+
         const deleted = await folders.findOneAndDelete({ _id: folderId, childProfileId });
 
         if (!deleted) {
             return res.status(404).json({ success: false, message: "Folder not found." });
         }
 
-        /* Same childProfileId scope, so this can only ever touch this child. */
-        const moved = await cards.updateMany(
-            { childProfileId, folderId },
-            { $set: { folderId: null, updatedAt: new Date() } }
+        /*
+         * The cards inside are DELETED, not orphaned.
+         *
+         * They used to be moved to folderId: null. That looked kinder but was
+         * worse: the board groups every card by its folder, so a card with no
+         * folder is invisible -- it survived in the database while vanishing
+         * from the screen, which is the least honest of the options. Deleting
+         * the folder now means what it says, and the confirmation dialog
+         * states the card count before anything happens.
+         *
+         * Scoped to childProfileId as well as folderId, so it can only ever
+         * touch this child's cards.
+         */
+        const removed = await cards.deleteMany({ childProfileId, folderId });
+
+        /*
+         * Tidy up uploaded media belonging to the deleted folder and its
+         * cards -- but only files nothing that REMAINS still references.
+         * Built-in /cards/... media is never touched.
+         */
+        const [otherCards, otherFolders] = await Promise.all([
+            cards.find({ childProfileId }).project({ imageUrl: 1, audioUrl: 1 }).toArray(),
+            folders.find({ childProfileId }).project({ imageUrl: 1 }).toArray()
+        ]);
+
+        const stillReferenced = new Set();
+        for (const c of otherCards) {
+            if (c.imageUrl) stillReferenced.add(c.imageUrl);
+            if (c.audioUrl) stillReferenced.add(c.audioUrl);
+        }
+        for (const f of otherFolders) {
+            if (f.imageUrl) stillReferenced.add(f.imageUrl);
+        }
+
+        /* The folder's own tile picture is cleaned up alongside its cards. */
+        const filesRemoved = await uploads.deleteMediaForCards(
+            [...inside, { imageUrl: deleted.imageUrl, audioUrl: null }],
+            childProfileId,
+            stillReferenced
         );
 
         return res.status(200).json({
             success: true,
             message: "Folder deleted.",
-            cardsMovedOut: moved.modifiedCount
+            cardsDeleted: removed.deletedCount,
+            filesRemoved
         });
 
     } catch (error) {
@@ -2201,16 +2367,70 @@ app.delete("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) 
             return res.status(404).json({ success: false, message: "Card not found." });
         }
 
-        const deleted = await cards.findOneAndDelete({
-            _id: cardId,
-            childProfileId: req.childProfile._id
-        });
+        const childProfileId = req.childProfile._id;
+
+        /*
+         * PROTECTED WORDS.
+         *
+         * The five quick-access core words are the backbone of a sentence --
+         * without "I" or "want" a child cannot build most of what they need
+         * to say, and there is currently no way to put one back. Refusing
+         * here, on the SERVER, is what makes the protection real: the UI also
+         * hides the control, but a UI check alone could be bypassed with
+         * curl.
+         *
+         * Read before deleting so the card is still there to inspect.
+         */
+        const card = await cards.findOne({ _id: cardId, childProfileId });
+
+        if (!card) {
+            return res.status(404).json({ success: false, message: "Card not found." });
+        }
+
+        if (card.isCoreWord) {
+            return res.status(409).json({
+                success: false,
+                code: "PROTECTED_CORE_WORD",
+                message: `"${card.word}" is a main core word and cannot be deleted.`
+            });
+        }
+
+        const deleted = await cards.findOneAndDelete({ _id: cardId, childProfileId });
 
         if (!deleted) {
             return res.status(404).json({ success: false, message: "Card not found." });
         }
 
-        return res.status(200).json({ success: true, message: "Card deleted." });
+        /*
+         * Tidy up the card's uploaded picture and sound -- but only if no
+         * OTHER card or folder still points at the same file. Two cards may
+         * legitimately share one uploaded photograph.
+         *
+         * Built-in media is untouchable here: deleteMediaForCards only acts on
+         * /uploads/ paths, and a shipped picture is /cards/..., so
+         * frontend/public/cards can never be reached.
+         */
+        const [otherCards, allFolders] = await Promise.all([
+            cards.find({ childProfileId }).project({ imageUrl: 1, audioUrl: 1 }).toArray(),
+            folders.find({ childProfileId }).project({ imageUrl: 1 }).toArray()
+        ]);
+
+        const stillReferenced = new Set();
+        for (const c of otherCards) {
+            if (c.imageUrl) stillReferenced.add(c.imageUrl);
+            if (c.audioUrl) stillReferenced.add(c.audioUrl);
+        }
+        for (const f of allFolders) {
+            if (f.imageUrl) stillReferenced.add(f.imageUrl);
+        }
+
+        const filesRemoved = await uploads.deleteMediaForCards(
+            [deleted],
+            childProfileId,
+            stillReferenced
+        );
+
+        return res.status(200).json({ success: true, message: "Card deleted.", filesRemoved });
 
     } catch (error) {
         console.log("Deleting a card failed:", error);

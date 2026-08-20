@@ -34,6 +34,62 @@
 import { API_BASE_URL } from '../AccountScreen/authConfig'
 
 /*
+ * Turns a stored media reference into a URL the browser can actually load.
+ *
+ * THE TWO KINDS OF MEDIA LIVE ON DIFFERENT ORIGINS.
+ *
+ *   /cards/...    the built-in library, in frontend/public -- served by the
+ *                 FRONTEND, so it is already on the page's own origin
+ *   /uploads/...  a caregiver's own picture or recording -- served by the
+ *                 BACKEND, which in development is a different port
+ *
+ * Both are stored root-relative, which is right for the database: it keeps
+ * the record free of any hostname, so the same document works in development
+ * and in production. But a root-relative URL in an <img> is resolved against
+ * the PAGE's origin, so "/uploads/x.jpg" asked the frontend dev server for a
+ * path it does not have. Vite answered with its SPA fallback -- index.html,
+ * 200, text/html -- and the <img> silently rendered nothing. That is exactly
+ * a blank picture area on a card whose data is perfectly correct.
+ *
+ * Prefixing only the /uploads/ paths with the API's origin fixes it without
+ * touching the database and without affecting the 163 built-in images, whose
+ * URLs are left exactly as they are.
+ *
+ * In production, where the API is usually served from the same origin,
+ * API_BASE_URL is either empty or that same origin, so this is a no-op.
+ */
+function toMediaUrl(stored) {
+  if (!stored) return stored
+
+  /* An absolute URL (object storage, later) is already complete. */
+  if (/^https?:\/\//i.test(stored)) return stored
+
+  /* Uploads live on the API. Everything else is on this origin already. */
+  if (stored.startsWith('/uploads/')) return `${API_BASE_URL}${stored}`
+
+  return stored
+}
+
+/*
+ * The inverse: turns a displayable URL back into what belongs in the database.
+ *
+ * Necessary because toMediaUrl() puts the API's origin on upload paths for
+ * display, and that origin must NOT be written back to MongoDB -- a stored
+ * "http://localhost:5000/uploads/x.jpg" would be correct on this machine and
+ * broken everywhere else, including production. The database keeps the
+ * root-relative form, which is portable.
+ */
+export function toStoredUrl(displayed) {
+  if (!displayed) return displayed
+
+  if (API_BASE_URL && displayed.startsWith(`${API_BASE_URL}/uploads/`)) {
+    return displayed.slice(API_BASE_URL.length)
+  }
+
+  return displayed
+}
+
+/*
  * Turns one API card into the object a card component renders.
  *
  * The field names on the left are what the components read today; the ones on
@@ -56,7 +112,7 @@ function toCard(apiCard, categoryIdByFolderId) {
      * open and show all of them.
      */
     category: apiCard.folderId ? categoryIdByFolderId.get(apiCard.folderId) ?? 'basic' : 'basic',
-    image: apiCard.imageUrl,
+    image: toMediaUrl(apiCard.imageUrl),
     emoji: apiCard.emoji,
     coreWord: Boolean(apiCard.isCoreWord),
     /*
@@ -66,7 +122,7 @@ function toCard(apiCard, categoryIdByFolderId) {
      * to get them back.
      */
     folderId: apiCard.folderId,
-    audioUrl: apiCard.audioUrl,
+    audioUrl: toMediaUrl(apiCard.audioUrl),
   }
 }
 
@@ -83,7 +139,7 @@ function toCategory(apiFolder) {
     folderId: apiFolder.id,
     label: apiFolder.name,
     emoji: apiFolder.emoji,
-    imageUrl: apiFolder.imageUrl,
+    imageUrl: toMediaUrl(apiFolder.imageUrl),
   }
 }
 
@@ -235,11 +291,16 @@ async function sendJson(pathname, method, body) {
   try {
     response = await fetch(`${API_BASE_URL}${pathname}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      /*
+       * A DELETE carries no body, so it declares no Content-Type either --
+       * announcing JSON and sending nothing is the kind of small
+       * inconsistency that later confuses a proxy or a log.
+       */
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
       // The session cookie. childProfileId is never sent -- the backend
       // derives it, which is what stops one family reaching another's card.
       credentials: 'include',
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch (networkError) {
     /*
@@ -280,6 +341,96 @@ async function sendJson(pathname, method, body) {
   }
 
   return data
+}
+
+/*
+ * Uploads one file and returns the URL to store on a card.
+ *
+ * Uploading is a SEPARATE step from saving: this returns a url, and the
+ * caller only writes it into a card when the caregiver presses Save. So
+ * choosing a picture, seeing it, and then cancelling leaves the card exactly
+ * as it was.
+ *
+ * FormData is used rather than JSON because a file is bytes, and base64 in a
+ * JSON body would inflate it by a third for no benefit. The browser sets the
+ * multipart Content-Type (including its boundary) itself -- setting it by
+ * hand here would omit the boundary and the server could not parse the body.
+ */
+async function uploadFile(kind, file) {
+  const body = new FormData()
+  body.append('file', file)
+
+  let response
+
+  try {
+    response = await fetch(`${API_BASE_URL}/api/uploads/${kind}`, {
+      method: 'POST',
+      credentials: 'include',
+      body,
+    })
+  } catch (networkError) {
+    console.log(`upload ${kind} did not complete:`, networkError)
+    throw new Error('Could not reach the server. Please check your connection and try again.')
+  }
+
+  let data = null
+  try {
+    data = await response.json()
+  } catch {
+    /* Some errors carry no JSON body. */
+  }
+
+  if (!response.ok || !data?.success) {
+    throw new Error(data?.message || 'Could not upload that file. Please try again.')
+  }
+
+  /* Returned for immediate PREVIEW, so it needs the same origin treatment
+     as a stored one -- the preview is an <img> on this page. */
+  return toMediaUrl(data.url)
+}
+
+export const uploadImage = (file) => uploadFile('image', file)
+export const uploadAudio = (file) => uploadFile('audio', file)
+
+/*
+ * Creates a card, or a folder.
+ *
+ * childProfileId is never sent: the backend derives it from the session, so
+ * a caller cannot create something on another family's board.
+ */
+export async function createCard(fields) {
+  const data = await sendJson('/api/cards', 'POST', fields)
+  return data.card
+}
+
+export async function createFolder(fields) {
+  const data = await sendJson('/api/folders', 'POST', fields)
+  return data.folder
+}
+
+/* Renames or re-icons an existing folder. Its _id, childProfileId and order
+   are untouched -- only the fields passed here change. */
+export async function updateFolder(folderId, changes) {
+  const data = await sendJson(`/api/folders/${folderId}`, 'PATCH', changes)
+  return data.folder
+}
+
+/*
+ * Deletes one card, or one folder and everything inside it.
+ *
+ * Both THROW on failure, which is what keeps the UI honest: the caller only
+ * removes anything from view after the server has confirmed, so a failed
+ * delete leaves the item exactly where it was. No optimistic removal.
+ *
+ * No childProfileId is sent -- the backend derives it from the session, so
+ * one family cannot delete another's card by guessing an id.
+ */
+export async function deleteCard(cardId) {
+  return sendJson(`/api/cards/${cardId}`, 'DELETE')
+}
+
+export async function deleteFolder(folderId) {
+  return sendJson(`/api/folders/${folderId}`, 'DELETE')
 }
 
 /*

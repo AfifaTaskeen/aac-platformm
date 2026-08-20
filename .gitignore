@@ -15,6 +15,13 @@ backend/keys/
 # Audio produced by test-tts.js
 backend/tts-test-*.mp3
 
+# Caregiver-uploaded pictures and audio.
+#
+# These are a family's own photographs and recordings of their child's world.
+# They are user DATA, not source: they belong in the deployment's storage, not
+# in the repository, and committing them would publish private material.
+backend/uploads/
+
 # Dependencies
 backend/node_modules/
 frontend/node_modules/

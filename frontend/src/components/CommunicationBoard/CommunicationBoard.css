@@ -515,12 +515,23 @@
   gap: var(--cgap);
 
   /*
-     Rows take their height from --rowh, which is computed from the space
-     actually available (see .cboard__cards). Sizing rows from the card's
-     WIDTH is what previously made the bottom row overflow and clipped the
-     last folders off the screen.
+     ROWS ARE SIZED BY THE CARD ITSELF, NOT BY A SHARE OF THE HEIGHT.
+
+     `auto` lets each row take the height its cards need -- and because every
+     card now has a fixed aspect ratio and a fixed label height (see .ccard),
+     that height is IDENTICAL for every card on the board. One rule, one size,
+     every folder.
+
+     This replaces `grid-auto-rows: var(--rowh)`, which was the real cause of
+     the inconsistency. --rowh was built from --actual-colw, which contains a
+     `100%` term; a percentage inside an inherited custom property resolves
+     against whichever element finally consumes it, and grid-auto-rows
+     resolves percentages against the grid's HEIGHT. So the row height was
+     computed from the wrong dimension and changed with the number of rows --
+     a two-row folder got visibly taller cards than a four-row folder, which
+     is exactly the symptom in the screenshot.
   */
-  grid-auto-rows: var(--rowh);
+  grid-auto-rows: auto;
   align-content: start;
 }
 
@@ -653,9 +664,17 @@
      the overflow. The cell's own proportions stay sensible because --rowh is
      bounded (120px floor, 34vh ceiling).
   */
+  /*
+     The card fills its COLUMN, and its height comes from its own contents:
+     a square picture area plus a fixed label row plus this padding. Because
+     all three are identical on every card, every card is the same height --
+     in every folder, on every row.
+
+     `height: 100%` was removed with grid-auto-rows: it stretched the card to
+     whatever the row had been (mis)computed as, which is what let one folder
+     differ from another.
+  */
   width: 100%;
-  height: 100%;
-  min-height: 0;
   padding: clamp(6px, 1vh, 12px);
 
   /*
@@ -751,27 +770,26 @@
    silently dropping its picture. A missing image on an AAC board is not a
    cosmetic bug -- the picture IS the word for a child who cannot read.
 */
+/*
+   THE PICTURE AREA IS A FIXED SQUARE.
+
+   `aspect-ratio: 1 / 1` is what makes every image area the same size: the
+   grid gives every column the same width, and the height now follows from
+   that width rather than from the picture inside it or the space left over.
+
+   This is the single most important rule for card consistency. Previously
+   this box was `flex: 1`, so its height was "whatever remains" -- which
+   depended on the row height, the label's line count and the image's own
+   proportions, and therefore differed from card to card.
+
+   object-fit: contain on the image (below) then fits any photograph inside
+   this fixed square without stretching or cropping it.
+*/
 .ccard__imagebox {
-  flex: 1;
   width: 100%;
-  /*
-     The floor: about two lines of label, which is enough that the picture is
-     always clearly visible and never a sliver.
-
-     Deliberately modest. The row height on most screens is only just enough
-     for a two-line label plus a picture plus the card's padding and border,
-     so a generous floor here would push the total past the row and make every
-     grid scroll. 2.2em of the CARD's font size tracks the text size setting
-     and stays in proportion at every breakpoint.
-
-     NOT derived from --rowh: that variable is built from --actual-colw, which
-     contains a `100%` term, and a percentage inside an inherited custom
-     property resolves against whichever element finally uses it -- here this
-     box's own width rather than the grid's. The emoji rules tolerate that
-     looseness because they only pick a font size; a floor guarding against a
-     collapsed slot cannot.
-  */
-  min-height: 2.2em;
+  aspect-ratio: 1 / 1;
+  /* No flex growth: the ratio decides the height, nothing else. */
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -779,6 +797,7 @@
   border-radius: clamp(10px, 1.8vh, 16px);
   background: var(--color-surface);
 }
+
 
 /*
    The image FILLS its slot; `contain` then fits the photograph inside it.
@@ -832,13 +851,16 @@
 }
 
 /*
-   Sized from the CARD's own height (--rowh), not the viewport. A viewport
-   unit ignored how tall the card actually was, so on a short card the emoji
-   crowded the word beneath it. At 42% of the row it always leaves room for
-   the label, whatever the grid works out to.
+   Sized in `em`, which on this element resolves against the card's own font
+   size -- so the emoji scales with the Text Size setting and with the card,
+   and never needs to know the row height.
+
+   It used to be a share of --rowh. That variable no longer drives the row
+   (rows are content-sized now so every card matches), so reading it here
+   would size the emoji from a number nothing else uses.
 */
 .ccard__emoji {
-  font-size: clamp(1.8rem, calc(var(--rowh, 200px) * 0.42), 4.2rem);
+  font-size: clamp(1.8rem, 2.2em, 4.2rem);
   line-height: 1;
 }
 
@@ -853,8 +875,8 @@
      folder names bigger have been removed. */
   font-size: clamp(1.4rem, 3.3vh, 2.15rem);
   color: var(--color-on-tint);
-  /* line-height is set once, further down alongside the label's minimum
-     height, so the two cannot drift apart -- that minimum is calculated FROM
+  /* line-height is set once, further down alongside the label's fixed
+     height, so the two cannot drift apart -- that height is calculated FROM
      this value. */
   text-align: center;
   /* Long words shrink rather than overflowing their card. */
@@ -929,7 +951,7 @@
    emoji take a larger share of the card than a picture card's fallback. */
 .cfolder .ccard__emoji,
 .ccard--core .ccard__emoji {
-  font-size: clamp(2rem, calc(var(--rowh, 200px) * 0.48), 4.6rem);
+  font-size: clamp(2rem, 2.5em, 4.6rem);
 }
 
 /* --------------------------------------------------------------------------
@@ -1476,73 +1498,53 @@
    `anywhere` breaks it rather than letting it push past the card edge. That
    case does not resize the slot, because the height here is fixed.
 */
+/*
+   A FIXED LABEL ROW.
+
+   Every card reserves exactly two lines, so a one-word card and a card whose
+   word wraps occupy the same height -- and therefore so do the cards.
+
+   A MINIMUM was not enough: a long word still grew the row, which made that
+   card taller than its neighbours. A fixed height is safe now only because
+   the picture above it is sized by its own aspect ratio rather than by
+   leftover space, so pinning the label can no longer starve the image.
+
+   calc(2 * 1.12em) is two lines at this element's own line-height, so it
+   tracks the Text Size setting automatically. `em` rather than the `lh` unit
+   because lh needs a newer browser than this build targets.
+*/
 .ccard__label {
-  overflow-wrap: anywhere;
-  hyphens: auto;
-  line-height: 1.12;
-  /* Never covers the picture: the label keeps its own space in the column
-     and the image box takes what is left. */
   flex: none;
   width: 100%;
+  height: calc(2 * 1.12em);
+  line-height: 1.12;
 
-  /*
-     A CONSISTENT label area, without starving the picture.
-
-     The goal is that "Eat" and "Bathroom" occupy the same height, so the
-     picture slot above them is the same on every card. The obvious way to do
-     that -- a fixed two-line `height` -- is what broke the board: the label
-     is sized in vh, so on a tall narrow screen two lines came to 74px inside
-     a 111px row, leaving the picture nothing and making every image vanish.
-
-     So the reservation is a MINIMUM, and the flex-basis is what actually
-     equalises the cards: every label starts from the same two-line basis and
-     the picture takes the rest. A word that needs a second line already has
-     it; a word that does not still reserves it.
-
-     `overflow: hidden` was removed with the fixed height. Clipping a word on
-     an AAC board is worse than a slight layout shift -- the word is the point.
-  */
-  min-height: calc(2 * 1.12em);
-  /*
-     The cap. The label may never take more than 45% of the card, whatever the
-     text size or screen proportions -- which is the guard the fixed height
-     lacked. The picture is guaranteed the remainder, so it can never be
-     squeezed out of existence again.
-  */
-  max-height: 45%;
   display: flex;
   align-items: center;
   justify-content: center;
+
+  text-align: center;
+  overflow-wrap: anywhere;
+  hyphens: auto;
+  /* A word longer than two lines is clipped rather than allowed to grow the
+     card. No default word reaches this. */
+  overflow: hidden;
 }
+
 
 /* ==========================================================================
-   GRID SIZE -- height behaviour
+   GRID SIZE
 
-   The row height is normally the available height divided by the row count,
-   which fills the screen. That works against the Small setting: narrower
-   columns produce MORE rows, but each row then gets a taller share, and the
-   card ends up no smaller in area than Medium.
+   Small / Medium / Large now change the COLUMN COUNT only (--cols, set from
+   CommunicationBoard.jsx). More columns means narrower columns, and since a
+   card's height follows its width through the picture's 1:1 ratio, smaller
+   columns give proportionally smaller cards automatically.
 
-   Capping the row relative to the column width restores the intent -- a Small
-   card is smaller in both dimensions, a Large card bigger in both.
+   The per-size --rowh overrides that used to live here have been removed.
+   They set a variable nothing reads any more: rows are sized by their
+   content now, precisely so that every card is identical regardless of how
+   many rows a folder happens to have.
    ========================================================================== */
-.cboard__cards--small .cboard__grid {
-  --rowh: clamp(
-    calc(var(--actual-colw) * 0.7),
-    calc((100% - 12px - (var(--rows) - 1) * var(--cgap)) / var(--rows)),
-    calc(var(--actual-colw) * 1.05)
-  );
-}
-
-/* Large is the mirror image: the row may grow further relative to the
-   column, so bigger columns really do give bigger cards. */
-.cboard__cards--large .cboard__grid {
-  --rowh: clamp(
-    calc(var(--actual-colw) * 0.8),
-    calc((100% - 12px - (var(--rows) - 1) * var(--cgap)) / var(--rows)),
-    calc(var(--actual-colw) * 1.3)
-  );
-}
 
 /* ==========================================================================
    SETTINGS PANEL
@@ -2067,3 +2069,187 @@
    time -- and the size it grows to live together, instead of half here and
    half in JavaScript.
    ========================================================================== */
+
+/* ==========================================================================
+   EDIT WORDS -- MANAGEMENT SCREENS
+
+   Additions for the restructured flow: the menu rows' descriptions, the
+   media (picture/sound) fields, and the hidden file inputs.
+
+   Every colour is a theme token, and each pairing follows one already proven
+   elsewhere in this file, so nothing here can become invisible in dark mode.
+   ========================================================================== */
+
+/* The second line on a menu row, explaining what the choice does. */
+.cedit__rowdesc {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: clamp(0.82rem, 1.7vh, 0.98rem);
+  color: var(--color-muted-text);
+  /* Long descriptions wrap under the label rather than pushing the chevron
+     off the row. */
+  max-width: 34ch;
+}
+
+/* A media field: thumbnail on the left, buttons on the right. */
+.cedit__media {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2vw, 18px);
+}
+
+.cedit__mediabtns {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1vh, 10px);
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+   A quieter button than Save: for choosing a file, where the action is a
+   step along the way rather than the commitment at the end.
+*/
+.cedit__btn--soft {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: clamp(0.92rem, 1.9vh, 1.08rem);
+  min-height: clamp(46px, 5.6vh, 58px);
+  padding: 0 clamp(12px, 2vw, 18px);
+}
+
+/*
+   The native file input, hidden but still FOCUSABLE and still in the DOM.
+
+   `display: none` would take it out of the accessibility tree and stop the
+   click() that the visible button forwards to it. Clipping it to a single
+   pixel keeps it functional while invisible -- the standard technique for a
+   control that is driven by a styled proxy.
+*/
+.cedit__file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The preview player, so a caregiver can hear a sound before saving it. */
+.cedit__audio {
+  width: 100%;
+  max-width: 260px;
+  height: 36px;
+}
+
+/* A success or progress note at the top of a screen. */
+.cedit__notice {
+  margin: 0 0 clamp(10px, 1.6vh, 16px);
+  padding: clamp(10px, 1.4vh, 14px) clamp(12px, 2vw, 18px);
+  font-family: var(--font-body);
+  font-size: clamp(0.92rem, 1.9vh, 1.08rem);
+  color: var(--color-ink);
+  background: var(--color-selected);
+  border-radius: clamp(10px, 1.8vh, 16px);
+}
+
+/* A hint that reads as body text in a form, rather than centred in an empty
+   panel. */
+.cedit__hint--left {
+  text-align: left;
+  padding: 0 0 clamp(4px, 1vh, 8px);
+}
+
+/* The chosen file's name, under the Choose button, so a caregiver can
+   confirm they picked the right file before saving. */
+.cedit__filename {
+  font-family: var(--font-body);
+  font-size: clamp(0.82rem, 1.7vh, 0.96rem);
+  color: var(--color-ink);
+  /* A long filename wraps rather than stretching the panel. */
+  overflow-wrap: anywhere;
+}
+
+.cedit__filename--empty {
+  color: var(--color-muted-text);
+}
+
+/* ==========================================================================
+   DELETE
+
+   The confirmation panel and the destructive button. Every colour is a theme
+   token or a value already used elsewhere in this file, so these follow the
+   light and dark themes like everything else.
+   ========================================================================== */
+
+/* A row that cannot be chosen -- the protected core words. Shown rather than
+   hidden, so a caregiver is not left wondering where a word went. */
+.cset__row--locked {
+  /* A colour change, not opacity: opacity would fade the thumbnail and the
+     text together and make the row hard to read rather than merely
+     unavailable. */
+  background: var(--color-cream-warm);
+  cursor: default;
+}
+
+.cset__row--locked .cset__row-label {
+  color: var(--color-muted-text);
+}
+
+/* The confirmation: what is about to be removed, shown beside the question. */
+.cedit__confirm {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2vw, 18px);
+  padding: clamp(12px, 2vh, 18px);
+  background: var(--color-surface);
+  border: 3px solid var(--color-ink);
+  border-radius: clamp(12px, 2vh, 18px);
+}
+
+.cedit__confirm-title {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.05rem, 2.3vh, 1.35rem);
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+
+.cedit__confirm-text {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.9rem, 1.9vh, 1.05rem);
+  line-height: 1.4;
+  color: var(--color-muted-text);
+}
+
+/*
+   The destructive action.
+
+   Deliberately the ONLY red button in the app, and deliberately not the
+   default focus: Cancel sits first in the row, so the safe choice is the one
+   nearest the thumb on a tablet.
+
+   #b3261e carries white text at 7.0:1 and reads as a warning in both themes
+   without becoming the brightest thing on screen.
+*/
+.cedit__btn--danger {
+  background: #b3261e;
+  color: #ffffff;
+  border-color: var(--color-ink);
+}
+
+.cedit__btn--danger:active {
+  background: #8f1e17;
+}
+
+.cedit__btn--danger:disabled {
+  background: #6b4a47;
+  color: #d8cbca;
+}

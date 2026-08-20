@@ -1,113 +1,304 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchCardImages, updateCard } from '../boardApi'
+import {
+  updateCard,
+  createCard,
+  createFolder,
+  updateFolder,
+  uploadImage,
+  uploadAudio,
+  deleteCard,
+  deleteFolder,
+  toStoredUrl,
+} from '../boardApi'
 
 /*
  * EditCardDialog.jsx
  * ------------------
- * Editing one existing card's word, folder and picture.
+ * Managing the board: editing a card, editing a folder, or creating either.
  *
- * The flow, as four stages in one panel:
+ * THE SHAPE OF THE FLOW
  *
- *   FOLDERS  ->  CARDS  ->  EDIT CARD  ->  (pick a picture)
- *                              |
- *                              save -> PATCH /api/cards/:id -> reload board
+ *   MENU ─┬─ Customize Existing Card   → folder → card → edit form
+ *         ├─ Customize Existing Folder → folder → folder form
+ *         └─ Create New ─┬─ New Folder → folder form
+ *                        └─ New Card ─┬─ into an existing folder → card form
+ *                                     └─ into a new folder → folder form
+ *                                                          → card form
+ *                                            (the new folder is preselected)
  *
- * Deliberately the SAME shell as Settings -- .cpanel for the frame,
- * .cset__row for a list row, .cset__option for a choice. A caregiver who has
- * used Settings already knows how to move around this, and it inherits the
- * theme, the dark mode and the touch sizes without restating any of it.
+ * It opens on the MENU rather than on a list of folders, so the common case
+ * -- "I want to change one word" -- is two taps from the top instead of a
+ * hunt through eleven folders for a screen that might not be the one wanted.
  *
- * WHAT THIS DOES NOT DO
- * ---------------------
- * Add, delete, reorder, record audio, upload a picture. Only editing an
- * existing card, which is what was asked for. `order` is never sent, so a
- * card keeps its position.
+ * ONE STACK, NOT A TREE OF DIALOGS
+ *
+ * Every screen is a value of `stage`, and `history` is the path taken to get
+ * there. Back pops the stack, so it always returns where the caregiver came
+ * from -- including the case where the card form was reached by creating a
+ * folder on the way, which a fixed per-screen "back target" cannot express.
+ *
+ * It reuses the Settings panel's own classes (.cpanel, .cset__row) so it
+ * inherits the theme, dark mode and touch sizes without restating any of it.
  *
  * Props:
- *   board     - { categories, cardsByCategory, basicWords } from the API
- *   onSaved   - called after a successful PATCH, so the board can reload
+ *   board     - { allCategories, categories, cardsByCategory, basicWords }
+ *   onSaved   - called after any successful write, so the board reloads
  *   onClose
  */
 
-/* The stages, named so the transitions below read as English. */
-const STAGE_FOLDERS = 'folders'
-const STAGE_CARDS = 'cards'
-const STAGE_EDIT = 'edit'
-const STAGE_IMAGE = 'image'
+/* The screens. Named so the transitions read as English. */
+const MENU = 'menu'
+const PICK_FOLDER_FOR_CARD = 'pick-folder-for-card'
+const PICK_CARD = 'pick-card'
+const EDIT_CARD = 'edit-card'
+const PICK_FOLDER_TO_EDIT = 'pick-folder-to-edit'
+const EDIT_FOLDER = 'edit-folder'
+const CREATE_MENU = 'create-menu'
+const CREATE_FOLDER = 'create-folder'
+const CREATE_CARD_WHERE = 'create-card-where'
+/* Creating a folder as the first half of creating a card. A separate screen
+   from CREATE_FOLDER because its Save continues to the card form instead of
+   closing, and its heading says so. */
+const CREATE_FOLDER_THEN_CARD = 'create-folder-then-card'
+const PICK_FOLDER_FOR_NEW_CARD = 'pick-folder-for-new-card'
+/* Deleting. Two entry points and a confirmation for each -- nothing is
+   removed without an explicit second tap. */
+const DELETE_MENU = 'delete-menu'
+const DELETE_PICK_FOLDER_FOR_CARD = 'delete-pick-folder-for-card'
+const DELETE_PICK_CARD = 'delete-pick-card'
+const DELETE_CONFIRM_CARD = 'delete-confirm-card'
+const DELETE_PICK_FOLDER = 'delete-pick-folder'
+const DELETE_CONFIRM_FOLDER = 'delete-confirm-folder'
+const CREATE_CARD = 'create-card'
+
+const MAX_WORD = 40
+const MAX_FOLDER_NAME = 40
+
+/* Shown on a folder tile that has no picture of its own. */
+const DEFAULT_FOLDER_EMOJI = '🗂️'
+
+/*
+ * THESE COMPONENTS LIVE AT MODULE SCOPE, AND THAT IS LOAD-BEARING.
+ *
+ * They used to be declared inside EditCardDialog, and that was the bug that
+ * made image and audio replacement fail.
+ *
+ * A function declared during render is a NEW function object every render, so
+ * React sees a different component TYPE each time and cannot reconcile the
+ * old tree with the new one -- it unmounts the whole subtree and mounts a
+ * fresh one. The `<input type="file">` lives in that subtree, so the moment
+ * anything set state, the input holding the caregiver's chosen file was
+ * destroyed and replaced with an empty one.
+ *
+ * Uploading sets state twice (busy on, busy off), so the input was torn down
+ * WHILE the upload it started was still in flight. The picker opened, a file
+ * was chosen, and then the element that had it vanished -- which is exactly
+ * "the file picker works but nothing is saved".
+ *
+ * Declared out here they are stable types, React updates them in place, and
+ * the input survives every re-render.
+ */
+
+const Chevron = () => (
+  <svg className="cset__row-chevron" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path
+      d="M9 5l7 7-7 7"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+function MenuRow({ label, description, onClick, innerRef }) {
+  return (
+    <button type="button" className="cset__row" onClick={onClick} ref={innerRef}>
+      <span className="cset__row-label">
+        {label}
+        {description && <span className="cedit__rowdesc">{description}</span>}
+      </span>
+      <Chevron />
+    </button>
+  )
+}
+
+function FolderList({ folders, onPick, firstRef }) {
+  return (
+    <div className="cset__rows">
+      {folders.map((folder, index) => (
+        <button
+          type="button"
+          key={folder.id}
+          className="cset__row"
+          onClick={() => onPick(folder)}
+          ref={index === 0 ? firstRef : undefined}
+        >
+          {/* The folder NAME alone. The emoji that used to prefix every row
+              added nothing -- the name already identifies the folder, and a
+              column of decorative glyphs made the list harder to scan, not
+              easier. */}
+          <span className="cset__row-label">{folder.label}</span>
+          <Chevron />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/*
+ * A media field: the current picture or sound, and ONE button to replace it.
+ *
+ * Deliberately a single "Choose…" button. The operating system's own picker
+ * already offers the gallery, Downloads, Documents, Desktop and cloud
+ * storage; listing those as separate in-app choices duplicated the OS badly,
+ * added a decision before the real one, and could only ever be a worse
+ * version of the picker the device already provides.
+ */
+function MediaField({ label, kind, url, fileName, uploading, disabled, inputRef, onChoose }) {
+  const accept =
+    kind === 'image'
+      ? 'image/jpeg,image/png,image/webp,image/gif'
+      : 'audio/mpeg,audio/wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/webm'
+
+  return (
+    <div className="cedit__field">
+      <span className="cedit__label">{label}</span>
+
+      <div className="cedit__media">
+        <span className="cedit__thumb cedit__thumb--lg" aria-hidden="true">
+          {kind === 'image' && url ? (
+            <img className="cedit__thumb-img" src={url} alt="" />
+          ) : (
+            <span className="cedit__thumb-emoji">
+              {kind === 'image' ? '🖼️' : url ? '🔊' : '🔇'}
+            </span>
+          )}
+        </span>
+
+        <div className="cedit__mediabtns">
+          <button
+            type="button"
+            className="cedit__btn cedit__btn--soft"
+            onClick={() => inputRef.current?.click()}
+            disabled={disabled}
+          >
+            {uploading ? 'Uploading…' : kind === 'image' ? 'Choose Image' : 'Choose Audio'}
+          </button>
+
+          {/* What is currently set: the chosen filename, or a note that the
+              card already has media from before this edit. */}
+          {fileName ? (
+            <span className="cedit__filename">{fileName}</span>
+          ) : url ? (
+            <span className="cedit__filename">
+              {kind === 'image' ? 'Current picture' : 'Current sound'}
+            </span>
+          ) : (
+            <span className="cedit__filename cedit__filename--empty">None</span>
+          )}
+
+          {kind === 'audio' && url && (
+            /* So a caregiver can hear what they picked before saving. Native
+               controls: this is a caregiver screen, not the child's board. */
+            <audio className="cedit__audio" src={url} controls preload="none" />
+          )}
+        </div>
+      </div>
+
+      {/*
+        The real file picker. Hidden but still in the DOM and focusable, and
+        driven by the button above -- which is what opens the OS picker, and
+        therefore what gives access to the gallery, Files, Downloads,
+        Documents and Desktop without the app listing any of them.
+      */}
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        className="cedit__file"
+        onChange={onChoose}
+      />
+    </div>
+  )
+}
 
 function EditCardDialog({ board, onSaved, onClose }) {
-  const [stage, setStage] = useState(STAGE_FOLDERS)
+  const [stage, setStage] = useState(MENU)
+  /* The screens visited, so Back can retrace the actual path taken. */
+  const [history, setHistory] = useState([])
 
-  /* Which folder is being browsed. The pseudo-folder 'basic' is the core
-     words, which live in no folder -- the board already uses that name. */
-  const [browsingCategory, setBrowsingCategory] = useState(null)
+  /* Which folder is being browsed or edited. */
+  const [activeFolder, setActiveFolder] = useState(null)
 
-  /* The card being edited, and the working copy of its fields. The original
-     is kept so Cancel can simply discard the draft. */
+  /* The card being edited -- null when creating one. */
   const [editingCard, setEditingCard] = useState(null)
-  const [draftWord, setDraftWord] = useState('')
-  const [draftCategory, setDraftCategory] = useState('')
-  const [draftImage, setDraftImage] = useState(null)
 
-  const [validationError, setValidationError] = useState('')
-  const [saveError, setSaveError] = useState('')
-  const [isSaving, setIsSaving] = useState(false)
+  /* The working copy of a card's fields. */
+  const [word, setWord] = useState('')
+  const [folderKey, setFolderKey] = useState('')
+  const [imageUrl, setImageUrl] = useState(null)
+  const [audioUrl, setAudioUrl] = useState(null)
 
-  /* The pictures available to choose from. Loaded once, when the picker is
-     first opened, rather than on mount -- most edits are a word change and
-     never need the list. */
-  const [images, setImages] = useState(null)
+  /* The working copy of a folder's fields. */
+  const [folderName, setFolderName] = useState('')
+  const [folderEmoji, setFolderEmoji] = useState('')
+  const [folderImageUrl, setFolderImageUrl] = useState(null)
+
+  /* The filename the caregiver chose, shown so they can confirm they picked
+     the right file before saving. */
+  const [imageName, setImageName] = useState('')
+  const [audioName, setAudioName] = useState('')
+  const [folderImageName, setFolderImageName] = useState('')
+
+  const [problem, setProblem] = useState('')
+  const [busy, setBusy] = useState(false)
+  /* Which field is uploading, so only that button shows "Uploading…". */
+  const [uploading, setUploading] = useState(null)
+  /* Shown briefly after a successful write. */
+  const [notice, setNotice] = useState('')
 
   const firstControlRef = useRef(null)
   const wordInputRef = useRef(null)
+  const imageInputRef = useRef(null)
+  const audioInputRef = useRef(null)
+  const folderImageInputRef = useRef(null)
 
-  /* Focus follows the stage, so a keyboard or switch user is never left with
-     focus on a control that has scrolled away. */
+  /* Every folder, including Core Words -- which is not a board tile but is
+     still a real folder whose cards must be editable. */
+  const folders = board.allCategories || board.categories
+
   useEffect(() => {
-    if (stage === STAGE_EDIT) {
-      wordInputRef.current?.focus()
-    } else {
-      firstControlRef.current?.focus()
-    }
+    if (stage === EDIT_CARD || stage === CREATE_CARD) wordInputRef.current?.focus()
+    else firstControlRef.current?.focus()
   }, [stage])
 
-  useEffect(() => {
-    if (stage !== STAGE_IMAGE || images !== null) return
+  /* Moves to a screen, remembering where we came from. */
+  const go = useCallback(
+    (next) => {
+      setProblem('')
+      setNotice('')
+      setHistory((h) => [...h, stage])
+      setStage(next)
+    },
+    [stage],
+  )
 
-    const controller = new AbortController()
-    fetchCardImages({ signal: controller.signal })
-      .then(setImages)
-      .catch((error) => {
-        if (error.name !== 'AbortError') setImages([])
-      })
-
-    return () => controller.abort()
-  }, [stage, images])
-
-  /*
-   * Steps back one stage, mirroring how the board's own Back button works.
-   * From the first stage it closes, so there is never a dead end.
-   */
+  /* Steps back one screen, or closes from the menu. */
   const goBack = useCallback(() => {
-    setSaveError('')
-    setValidationError('')
+    setProblem('')
+    setNotice('')
 
-    if (stage === STAGE_IMAGE) {
-      setStage(STAGE_EDIT)
+    if (history.length === 0) {
+      onClose()
       return
     }
-    if (stage === STAGE_EDIT) {
-      setEditingCard(null)
-      setStage(STAGE_CARDS)
-      return
-    }
-    if (stage === STAGE_CARDS) {
-      setBrowsingCategory(null)
-      setStage(STAGE_FOLDERS)
-      return
-    }
-    onClose()
-  }, [stage, onClose])
+
+    const previous = history[history.length - 1]
+    setHistory((h) => h.slice(0, -1))
+    setStage(previous)
+  }, [history, onClose])
 
   useEffect(() => {
     function onKeyDown(event) {
@@ -117,116 +308,290 @@ function EditCardDialog({ board, onSaved, onClose }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [goBack])
 
-  /* Opens one card for editing, seeding the draft from its current values. */
-  function openCard(card) {
+  /* ---------- opening the various forms ---------- */
+
+  function openCardForEditing(card) {
     setEditingCard(card)
-    setDraftWord(card.label)
-    setDraftCategory(card.category)
-    setDraftImage(card.image)
-    setValidationError('')
-    setSaveError('')
-    setStage(STAGE_EDIT)
+    setWord(card.label)
+    setFolderKey(card.category)
+    setImageUrl(card.image)
+    setAudioUrl(card.audioUrl || null)
+    setImageName('')
+    setAudioName('')
+    go(EDIT_CARD)
   }
 
-  /*
-   * Saves.
-   *
-   * Only CHANGED fields are sent. The backend's PATCH leaves an absent field
-   * alone, so an untouched picture is not rewritten and `order` -- which is
-   * never sent at all -- keeps the card exactly where it was.
-   */
-  async function handleSave() {
-    const word = draftWord.trim()
+  function openFolderForEditing(folder) {
+    setActiveFolder(folder)
+    setFolderName(folder.label)
+    setFolderEmoji(folder.emoji || '')
+    setFolderImageUrl(folder.imageUrl || null)
+    setFolderImageName('')
+    go(EDIT_FOLDER)
+  }
 
-    if (!word) {
-      setValidationError('Please enter a word for this card.')
+  function openNewFolderForm() {
+    setActiveFolder(null)
+    setFolderName('')
+    setFolderEmoji('')
+    setFolderImageUrl(null)
+    setFolderImageName('')
+    go(CREATE_FOLDER)
+  }
+
+  function openNewCardForm(folder) {
+    setEditingCard(null)
+    setActiveFolder(folder)
+    setWord('')
+    setFolderKey(folder ? folder.id : '')
+    setImageUrl(null)
+    setAudioUrl(null)
+    setImageName('')
+    setAudioName('')
+    go(CREATE_CARD)
+  }
+
+  /* ---------- uploads ---------- */
+
+  /*
+   * Uploading happens as soon as a file is chosen, but the RESULT is only
+   * held in local state -- nothing is written to the card until Save. So a
+   * caregiver can pick a picture, look at it, and still back out.
+   */
+  async function handleFileChosen(event, kind, setUrl, setName, which = kind) {
+    const file = event.target.files?.[0]
+    /* Clear the input so choosing the SAME file twice fires change again. */
+    event.target.value = ''
+
+    if (!file) return
+
+    setProblem('')
+    setBusy(true)
+    setUploading(which)
+
+    try {
+      const url = kind === 'image' ? await uploadImage(file) : await uploadAudio(file)
+
+      /*
+       * The upload has SUCCEEDED and the file is on the server -- but the
+       * card is untouched. Only local state changes here; the new url is
+       * written to MongoDB when Save is pressed, so Cancel genuinely cancels.
+       */
+      setUrl(url)
+      setName(file.name)
+    } catch (error) {
+      /* The form stays open and the previous picture is still shown, so a
+         failed upload costs nothing. */
+      setProblem(
+        error.message ||
+          (kind === 'image'
+            ? 'Image upload failed. Please try again.'
+            : 'Audio upload failed. Please try again.'),
+      )
+    } finally {
+      setBusy(false)
+      setUploading(null)
+    }
+  }
+
+  /* ---------- saving ---------- */
+
+  async function saveCard() {
+    const trimmed = word.trim()
+
+    if (!trimmed) {
+      setProblem('Please enter a word for this card.')
       wordInputRef.current?.focus()
       return
     }
-
-    if (!draftCategory) {
-      setValidationError('Please choose a folder for this card.')
+    if (!folderKey) {
+      setProblem('Please choose a folder for this card.')
       return
     }
 
-    setValidationError('')
-    setSaveError('')
+    const target = folders.find((f) => f.id === folderKey)
 
-    const changes = {}
-
-    if (word !== editingCard.label) {
-      changes.word = word
-    }
-
-    if (draftCategory !== editingCard.category) {
-      /*
-       * The API wants the folder's real MongoDB id, while the board works in
-       * palette keys.
-       *
-       * Every folder in the list is a REAL folder now, including Core Words
-       * -- so this always resolves to an id. There is no longer a synthetic
-       * "no folder" choice to translate to null.
-       */
-      /* allCategories, not categories: Core Words is absent from the tile
-         list but must still be a valid destination when moving a card. */
-      const target = (board.allCategories || board.categories).find(
-        (c) => c.id === draftCategory,
-      )
-      changes.folderId = target?.folderId ?? null
-    }
-
-    if (draftImage !== editingCard.image) {
-      changes.imageUrl = draftImage
-    }
-
-    if (Object.keys(changes).length === 0) {
-      // Nothing was altered -- close rather than sending an empty PATCH, which
-      // the backend would rightly reject as "Nothing to update".
-      onClose()
-      return
-    }
-
-    setIsSaving(true)
+    setProblem('')
+    setBusy(true)
 
     try {
-      await updateCard(editingCard.id, changes)
-      /*
-       * Only now, after MongoDB has confirmed the write, does the board
-       * reload. Nothing local is updated first -- if the request failed, the
-       * board must not be showing a change the database never accepted.
-       */
+      if (editingCard) {
+        /*
+         * Only CHANGED fields are sent. The backend leaves an absent field
+         * alone, so an untouched picture is not rewritten -- and `order` is
+         * never sent at all, which is what preserves the card's position.
+         * _id and childProfileId are not ours to change.
+         */
+        const changes = {}
+        if (trimmed !== editingCard.label) changes.word = trimmed
+        /* toStoredUrl strips the API origin that toMediaUrl added for
+           display, so MongoDB keeps the portable root-relative form. */
+        if (imageUrl !== editingCard.image) changes.imageUrl = toStoredUrl(imageUrl)
+        if ((audioUrl || null) !== (editingCard.audioUrl || null)) {
+          changes.audioUrl = toStoredUrl(audioUrl)
+        }
+        if (folderKey !== editingCard.category) changes.folderId = target?.folderId ?? null
+
+        if (Object.keys(changes).length === 0) {
+          onClose()
+          return
+        }
+
+        await updateCard(editingCard.id, changes)
+      } else {
+        await createCard({
+          word: trimmed,
+          folderId: target?.folderId ?? null,
+          imageUrl: toStoredUrl(imageUrl),
+          audioUrl: toStoredUrl(audioUrl),
+        })
+      }
+
       await onSaved()
       onClose()
     } catch (error) {
-      // The form STAYS OPEN with the caregiver's text intact, so a failed save
-      // never costs them their edit.
-      setSaveError(error.message || 'Could not save your changes. Please try again.')
-      setIsSaving(false)
+      /* The form STAYS OPEN with the caregiver's text intact, so a failed
+         save never costs them their work. */
+      setProblem(error.message || 'Could not save. Please try again.')
+      setBusy(false)
     }
   }
 
-  /*
-   * The folders to browse -- simply the real ones.
-   *
-   * Core Words used to be appended here as a synthetic entry, because core
-   * words lived outside every folder. They are a real folder now, so adding
-   * it again would list it twice and, worse, moving a card into that
-   * duplicate would have set folderId to null instead of the real id.
-   */
-  const browsableFolders = (board.allCategories || board.categories).map((c) => ({
-    id: c.id,
-    label: c.label,
-    emoji: c.emoji,
-  }))
+  async function saveFolder({ thenCreateCard = false } = {}) {
+    const trimmed = folderName.trim()
 
-  const cardsInBrowsed = board.cardsByCategory.get(browsingCategory) || []
+    if (!trimmed) {
+      setProblem('Please enter a folder name.')
+      return
+    }
 
-  const headingByStage = {
-    [STAGE_FOLDERS]: 'Edit Words',
-    [STAGE_CARDS]: browsableFolders.find((f) => f.id === browsingCategory)?.label || 'Cards',
-    [STAGE_EDIT]: 'Edit Card',
-    [STAGE_IMAGE]: 'Choose a Picture',
+    setProblem('')
+    setBusy(true)
+
+    try {
+      if (activeFolder) {
+        /* Editing: _id, childProfileId and order are all preserved -- only
+           the named fields change. */
+        await updateFolder(activeFolder.folderId, {
+          name: trimmed,
+          /*
+           * The folder's existing emoji is carried through unchanged. There
+           * is no longer a field for it -- it was clutter -- but it is still
+           * what the tile falls back to if the folder has no picture, so
+           * silently clearing it would leave a blank tile.
+           */
+          emoji: folderEmoji.trim() || null,
+          imageUrl: toStoredUrl(folderImageUrl),
+        })
+        await onSaved()
+        onClose()
+        return
+      }
+
+      const created = await createFolder({
+        name: trimmed,
+        /*
+         * A new folder gets a neutral folder glyph rather than nothing, so a
+         * folder created without a picture still has something to show. The
+         * caregiver is not asked to pick one -- that was the clutter.
+         */
+        emoji: folderEmoji.trim() || DEFAULT_FOLDER_EMOJI,
+        imageUrl: toStoredUrl(folderImageUrl),
+      })
+
+      /* The board must reload before the card form opens, or the new folder
+         would not be in the list it renders from. */
+      await onSaved()
+
+      if (thenCreateCard) {
+        /*
+         * Straight on to the card, with the folder just created already
+         * chosen -- the caregiver does not pick it again from a list they
+         * have only just added to.
+         */
+        setEditingCard(null)
+        setActiveFolder({ id: created.colorKey || created.id, folderId: created.id, label: created.name })
+        setWord('')
+        setFolderKey(created.colorKey || created.id)
+        setImageUrl(null)
+        setAudioUrl(null)
+        setBusy(false)
+        go(CREATE_CARD)
+        return
+      }
+
+      onClose()
+    } catch (error) {
+      setProblem(error.message || 'Could not save. Please try again.')
+      setBusy(false)
+    }
   }
+
+  /* ---------- deleting ---------- */
+
+  /*
+   * NOT OPTIMISTIC.
+   *
+   * Nothing is removed from view until MongoDB has confirmed the delete. On
+   * failure the dialog stays open with the item still listed and an error
+   * shown -- so a delete that did not happen never looks like one that did.
+   */
+  async function confirmDeleteCard() {
+    setProblem('')
+    setBusy(true)
+
+    try {
+      await deleteCard(editingCard.id)
+      /* Reload from the backend rather than splicing the local copy: the
+         database is the source of truth for what remains. */
+      await onSaved()
+      onClose()
+    } catch (error) {
+      setProblem(error.message || 'Could not delete the card. Please try again.')
+      setBusy(false)
+    }
+  }
+
+  async function confirmDeleteFolder() {
+    setProblem('')
+    setBusy(true)
+
+    try {
+      await deleteFolder(activeFolder.folderId)
+      await onSaved()
+      onClose()
+    } catch (error) {
+      setProblem(error.message || 'Could not delete the folder. Please try again.')
+      setBusy(false)
+    }
+  }
+
+  /* ---------- small building blocks ---------- */
+
+  /* ---------- the screens ---------- */
+
+  const titles = {
+    [MENU]: 'Edit Words',
+    [PICK_FOLDER_FOR_CARD]: 'Choose a folder',
+    [PICK_CARD]: activeFolder?.label || 'Choose a card',
+    [EDIT_CARD]: 'Edit card',
+    [PICK_FOLDER_TO_EDIT]: 'Choose a folder',
+    [EDIT_FOLDER]: 'Edit folder',
+    [CREATE_MENU]: 'Create new',
+    [CREATE_FOLDER]: 'New folder',
+    [CREATE_CARD_WHERE]: 'Where should it go?',
+    [CREATE_FOLDER_THEN_CARD]: 'New folder',
+    [PICK_FOLDER_FOR_NEW_CARD]: 'Choose a folder',
+    [DELETE_MENU]: 'Delete',
+    [DELETE_PICK_FOLDER_FOR_CARD]: 'Choose a folder',
+    [DELETE_PICK_CARD]: activeFolder?.label || 'Choose a card',
+    [DELETE_CONFIRM_CARD]: 'Delete card?',
+    [DELETE_PICK_FOLDER]: 'Choose a folder',
+    [DELETE_CONFIRM_FOLDER]: 'Delete folder?',
+    [CREATE_CARD]: 'New card',
+  }
+
+  const cardsHere = activeFolder ? board.cardsByCategory.get(activeFolder.id) || [] : []
 
   return (
     <div className="cpanel__backdrop" onClick={onClose}>
@@ -234,7 +599,7 @@ function EditCardDialog({ board, onSaved, onClose }) {
         className="cpanel"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="editcard-title"
+        aria-labelledby="editwords-title"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="cpanel__head">
@@ -242,18 +607,11 @@ function EditCardDialog({ board, onSaved, onClose }) {
             type="button"
             className="cpanel__iconbtn"
             onClick={goBack}
-            aria-label={stage === STAGE_FOLDERS ? 'Close editing' : 'Back'}
-            ref={firstControlRef}
+            aria-label={history.length === 0 ? 'Close' : 'Back'}
           >
-            {stage === STAGE_FOLDERS ? (
+            {history.length === 0 ? (
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path
-                  d="M6 6l12 12M18 6L6 18"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                />
+                <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
               </svg>
             ) : (
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -269,62 +627,63 @@ function EditCardDialog({ board, onSaved, onClose }) {
             )}
           </button>
 
-          <h2 className="cpanel__title" id="editcard-title">
-            {headingByStage[stage]}
+          <h2 className="cpanel__title" id="editwords-title">
+            {titles[stage]}
           </h2>
         </header>
 
         <div className="cpanel__body">
-          {/* ---------- 1. Which folder? ---------- */}
-          {stage === STAGE_FOLDERS && (
+          {notice && <p className="cedit__notice">{notice}</p>}
+
+          {/* ---------- the management menu ---------- */}
+          {stage === MENU && (
             <div className="cset__rows">
-              {browsableFolders.map((folder) => (
-                <button
-                  type="button"
-                  key={folder.id}
-                  className="cset__row"
-                  onClick={() => {
-                    setBrowsingCategory(folder.id)
-                    setStage(STAGE_CARDS)
-                  }}
-                >
-                  <span className="cset__row-label">
-                    <span aria-hidden="true">{folder.emoji} </span>
-                    {folder.label}
-                  </span>
-                  <svg
-                    className="cset__row-chevron"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                    focusable="false"
-                  >
-                    <path
-                      d="M9 5l7 7-7 7"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
-              ))}
+              <MenuRow
+                label="Customize existing card"
+                description="Change a word, picture, sound or folder"
+                onClick={() => go(PICK_FOLDER_FOR_CARD)}
+                innerRef={firstControlRef}
+              />
+              <MenuRow
+                label="Customize existing folder"
+                description="Rename a folder or change its icon"
+                onClick={() => go(PICK_FOLDER_TO_EDIT)}
+              />
+              <MenuRow
+                label="Create new"
+                description="Add a new card or folder"
+                onClick={() => go(CREATE_MENU)}
+              />
+              <MenuRow
+                label="Delete"
+                description="Remove a card or a folder"
+                onClick={() => go(DELETE_MENU)}
+              />
             </div>
           )}
 
-          {/* ---------- 2. Which card? ---------- */}
-          {stage === STAGE_CARDS && (
-            <div className="cset__rows">
-              {cardsInBrowsed.length === 0 && (
-                <p className="cedit__hint">There are no cards in this folder yet.</p>
-              )}
+          {/* ---------- customize existing card: folder → card ---------- */}
+          {stage === PICK_FOLDER_FOR_CARD && (
+            <FolderList
+              folders={folders}
+              firstRef={firstControlRef}
+              onPick={(folder) => {
+                setActiveFolder(folder)
+                go(PICK_CARD)
+              }}
+            />
+          )}
 
-              {cardsInBrowsed.map((card) => (
+          {stage === PICK_CARD && (
+            <div className="cset__rows">
+              {cardsHere.length === 0 && <p className="cedit__hint">This folder has no cards yet.</p>}
+              {cardsHere.map((card, index) => (
                 <button
                   type="button"
                   key={card.id}
                   className="cset__row"
-                  onClick={() => openCard(card)}
+                  onClick={() => openCardForEditing(card)}
+                  ref={index === 0 ? firstControlRef : undefined}
                 >
                   <span className="cedit__thumb" aria-hidden="true">
                     {card.image ? (
@@ -334,28 +693,14 @@ function EditCardDialog({ board, onSaved, onClose }) {
                     )}
                   </span>
                   <span className="cset__row-label">{card.label}</span>
-                  <svg
-                    className="cset__row-chevron"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                    focusable="false"
-                  >
-                    <path
-                      d="M9 5l7 7-7 7"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  <Chevron />
                 </button>
               ))}
             </div>
           )}
 
-          {/* ---------- 3. Edit it ---------- */}
-          {stage === STAGE_EDIT && editingCard && (
+          {/* ---------- the card form (edit and create share it) ---------- */}
+          {(stage === EDIT_CARD || stage === CREATE_CARD) && (
             <div className="cedit__form">
               <label className="cedit__field">
                 <span className="cedit__label">Word</span>
@@ -363,71 +708,311 @@ function EditCardDialog({ board, onSaved, onClose }) {
                   ref={wordInputRef}
                   className="cedit__input"
                   type="text"
-                  value={draftWord}
-                  maxLength={40}
-                  onChange={(event) => {
-                    setDraftWord(event.target.value)
-                    if (validationError) setValidationError('')
+                  value={word}
+                  maxLength={MAX_WORD}
+                  onChange={(e) => {
+                    setWord(e.target.value)
+                    if (problem) setProblem('')
                   }}
-                  aria-invalid={Boolean(validationError)}
                 />
               </label>
+
+              <MediaField
+                label="Image"
+                kind="image"
+                url={imageUrl}
+                fileName={imageName}
+                uploading={uploading === 'image'}
+                disabled={busy}
+                inputRef={imageInputRef}
+                onChoose={(e) => handleFileChosen(e, 'image', setImageUrl, setImageName)}
+              />
+
+              <MediaField
+                label="Audio"
+                kind="audio"
+                url={audioUrl}
+                fileName={audioName}
+                uploading={uploading === 'audio'}
+                disabled={busy}
+                inputRef={audioInputRef}
+                onChoose={(e) => handleFileChosen(e, 'audio', setAudioUrl, setAudioName)}
+              />
 
               <div className="cedit__field">
                 <span className="cedit__label">Folder</span>
                 <div className="cedit__chips">
-                  {browsableFolders.map((folder) => (
+                  {folders.map((folder) => (
                     <button
                       type="button"
                       key={folder.id}
-                      className={`cedit__chip ${
-                        draftCategory === folder.id ? 'cedit__chip--on' : ''
-                      }`}
+                      className={`cedit__chip ${folderKey === folder.id ? 'cedit__chip--on' : ''}`}
                       onClick={() => {
-                        setDraftCategory(folder.id)
-                        if (validationError) setValidationError('')
+                        setFolderKey(folder.id)
+                        if (problem) setProblem('')
                       }}
-                      aria-pressed={draftCategory === folder.id}
+                      aria-pressed={folderKey === folder.id}
                     >
                       <span aria-hidden="true">{folder.emoji} </span>
                       {folder.label}
-                      {/* A tick as well as the fill, so the choice never
-                          depends on colour alone. */}
-                      {draftCategory === folder.id && <span aria-hidden="true"> ✓</span>}
+                      {folderKey === folder.id && <span aria-hidden="true"> ✓</span>}
                     </button>
                   ))}
                 </div>
               </div>
 
-              <div className="cedit__field">
-                <span className="cedit__label">Picture</span>
-                <button
-                  type="button"
-                  className="cedit__picture"
-                  onClick={() => setStage(STAGE_IMAGE)}
-                >
-                  <span className="cedit__thumb cedit__thumb--lg" aria-hidden="true">
-                    {draftImage ? (
-                      <img className="cedit__thumb-img" src={draftImage} alt="" />
-                    ) : (
-                      <span className="cedit__thumb-emoji">{editingCard.emoji || '💬'}</span>
-                    )}
-                  </span>
-                  <span className="cedit__picture-text">
-                    {draftImage ? 'Change picture' : 'Choose a picture'}
-                  </span>
-                </button>
-              </div>
-
-              {validationError && (
+              {problem && (
                 <p className="cedit__error" role="alert">
-                  {validationError}
+                  {problem}
                 </p>
               )}
 
-              {saveError && (
+              <div className="cedit__actions">
+                <button type="button" className="cedit__btn cedit__btn--cancel" onClick={goBack} disabled={busy}>
+                  Cancel
+                </button>
+                <button type="button" className="cedit__btn cedit__btn--save" onClick={saveCard} disabled={busy}>
+                  {busy ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ---------- customize existing folder ---------- */}
+          {stage === PICK_FOLDER_TO_EDIT && <FolderList folders={folders} firstRef={firstControlRef} onPick={openFolderForEditing} />}
+
+          {(stage === EDIT_FOLDER || stage === CREATE_FOLDER) && (
+            <div className="cedit__form">
+              <label className="cedit__field">
+                <span className="cedit__label">Folder name</span>
+                <input
+                  className="cedit__input"
+                  type="text"
+                  value={folderName}
+                  maxLength={MAX_FOLDER_NAME}
+                  ref={firstControlRef}
+                  onChange={(e) => {
+                    setFolderName(e.target.value)
+                    if (problem) setProblem('')
+                  }}
+                />
+              </label>
+
+
+              <MediaField
+                label="Folder picture"
+                kind="image"
+                url={folderImageUrl}
+                fileName={folderImageName}
+                uploading={uploading === 'folder-image'}
+                disabled={busy}
+                inputRef={folderImageInputRef}
+                onChoose={(e) =>
+                  handleFileChosen(e, 'image', setFolderImageUrl, setFolderImageName, 'folder-image')
+                }
+              />
+
+              {problem && (
                 <p className="cedit__error" role="alert">
-                  {saveError}
+                  {problem}
+                </p>
+              )}
+
+              <div className="cedit__actions">
+                <button type="button" className="cedit__btn cedit__btn--cancel" onClick={goBack} disabled={busy}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="cedit__btn cedit__btn--save"
+                  onClick={() => saveFolder({ thenCreateCard: false })}
+                  disabled={busy}
+                >
+                  {busy ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ---------- create new ---------- */}
+          {stage === CREATE_MENU && (
+            <div className="cset__rows">
+              <MenuRow
+                label="Create new folder"
+                description="A new group of cards"
+                onClick={openNewFolderForm}
+                innerRef={firstControlRef}
+              />
+              <MenuRow
+                label="Create new card"
+                description="A new word for the board"
+                onClick={() => go(CREATE_CARD_WHERE)}
+              />
+            </div>
+          )}
+
+          {stage === CREATE_CARD_WHERE && (
+            <div className="cset__rows">
+              <MenuRow
+                label="Add to an existing folder"
+                onClick={() => go(PICK_FOLDER_FOR_NEW_CARD)}
+                innerRef={firstControlRef}
+              />
+              <MenuRow
+                label="Create a new folder for it"
+                description="The card is added to it straight away"
+                onClick={() => {
+                  setActiveFolder(null)
+                  setFolderName('')
+                  setFolderEmoji('')
+                  setFolderImageUrl(null)
+                  go(CREATE_FOLDER_THEN_CARD)
+                }}
+              />
+            </div>
+          )}
+
+          {stage === CREATE_FOLDER_THEN_CARD && (
+            <div className="cedit__form">
+              <p className="cedit__hint cedit__hint--left">
+                Step 1 of 2 — name the folder, then you will add the card.
+              </p>
+
+              <label className="cedit__field">
+                <span className="cedit__label">Folder name</span>
+                <input
+                  className="cedit__input"
+                  type="text"
+                  value={folderName}
+                  maxLength={MAX_FOLDER_NAME}
+                  ref={firstControlRef}
+                  onChange={(e) => {
+                    setFolderName(e.target.value)
+                    if (problem) setProblem('')
+                  }}
+                />
+              </label>
+
+
+              {problem && (
+                <p className="cedit__error" role="alert">
+                  {problem}
+                </p>
+              )}
+
+              <div className="cedit__actions">
+                <button type="button" className="cedit__btn cedit__btn--cancel" onClick={goBack} disabled={busy}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="cedit__btn cedit__btn--save"
+                  onClick={() => saveFolder({ thenCreateCard: true })}
+                  disabled={busy}
+                >
+                  {busy ? 'Saving…' : 'Next'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {stage === PICK_FOLDER_FOR_NEW_CARD && <FolderList folders={folders} firstRef={firstControlRef} onPick={openNewCardForm} />}
+
+          {/* ---------- delete: the two choices ---------- */}
+          {stage === DELETE_MENU && (
+            <div className="cset__rows">
+              <MenuRow
+                label="Delete a card"
+                description="Remove one word from a folder"
+                onClick={() => go(DELETE_PICK_FOLDER_FOR_CARD)}
+                innerRef={firstControlRef}
+              />
+              <MenuRow
+                label="Delete a folder"
+                description="Remove a folder and the cards inside it"
+                onClick={() => go(DELETE_PICK_FOLDER)}
+              />
+            </div>
+          )}
+
+          {/* ---------- delete a card: folder, then card ---------- */}
+          {stage === DELETE_PICK_FOLDER_FOR_CARD && (
+            <FolderList
+              folders={folders}
+              firstRef={firstControlRef}
+              onPick={(folder) => {
+                setActiveFolder(folder)
+                go(DELETE_PICK_CARD)
+              }}
+            />
+          )}
+
+          {stage === DELETE_PICK_CARD && (
+            <div className="cset__rows">
+              {cardsHere.length === 0 && <p className="cedit__hint">This folder has no cards.</p>}
+
+              {cardsHere.map((card, index) => {
+                /*
+                 * The five quick-access core words are shown but not
+                 * selectable. Hiding them would be more confusing -- a
+                 * caregiver would wonder where "Want" had gone -- so they are
+                 * listed, dimmed, and labelled as protected.
+                 */
+                const isProtected = card.coreWord
+
+                return (
+                  <button
+                    type="button"
+                    key={card.id}
+                    className={`cset__row ${isProtected ? 'cset__row--locked' : ''}`}
+                    onClick={() => {
+                      if (isProtected) return
+                      setEditingCard(card)
+                      go(DELETE_CONFIRM_CARD)
+                    }}
+                    disabled={isProtected}
+                    ref={index === 0 ? firstControlRef : undefined}
+                  >
+                    {/* The picture as well as the word, so the caregiver can
+                        see which card they are about to remove. */}
+                    <span className="cedit__thumb" aria-hidden="true">
+                      {card.image ? (
+                        <img className="cedit__thumb-img" src={card.image} alt="" />
+                      ) : (
+                        <span className="cedit__thumb-emoji">{card.emoji || '💬'}</span>
+                      )}
+                    </span>
+                    <span className="cset__row-label">
+                      {card.label}
+                      {isProtected && (
+                        <span className="cedit__rowdesc">Main core word — cannot be deleted</span>
+                      )}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {stage === DELETE_CONFIRM_CARD && editingCard && (
+            <div className="cedit__form">
+              <div className="cedit__confirm">
+                <span className="cedit__thumb cedit__thumb--lg" aria-hidden="true">
+                  {editingCard.image ? (
+                    <img className="cedit__thumb-img" src={editingCard.image} alt="" />
+                  ) : (
+                    <span className="cedit__thumb-emoji">{editingCard.emoji || '💬'}</span>
+                  )}
+                </span>
+                <div>
+                  <p className="cedit__confirm-title">Delete “{editingCard.label}”?</p>
+                  <p className="cedit__confirm-text">This card will be permanently removed.</p>
+                </div>
+              </div>
+
+              {problem && (
+                <p className="cedit__error" role="alert">
+                  {problem}
                 </p>
               )}
 
@@ -436,55 +1021,85 @@ function EditCardDialog({ board, onSaved, onClose }) {
                   type="button"
                   className="cedit__btn cedit__btn--cancel"
                   onClick={goBack}
-                  disabled={isSaving}
+                  disabled={busy}
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  className="cedit__btn cedit__btn--save"
-                  onClick={handleSave}
-                  disabled={isSaving}
+                  className="cedit__btn cedit__btn--danger"
+                  onClick={confirmDeleteCard}
+                  disabled={busy}
                 >
-                  {isSaving ? 'Saving…' : 'Save'}
+                  {busy ? 'Deleting…' : 'Delete'}
                 </button>
               </div>
             </div>
           )}
 
-          {/* ---------- 4. Pick a picture ---------- */}
-          {stage === STAGE_IMAGE && (
-            <div>
-              {images === null && <p className="cedit__hint">Loading pictures…</p>}
+          {/* ---------- delete a folder ---------- */}
+          {stage === DELETE_PICK_FOLDER && (
+            <FolderList
+              folders={folders}
+              firstRef={firstControlRef}
+              onPick={(folder) => {
+                setActiveFolder(folder)
+                go(DELETE_CONFIRM_FOLDER)
+              }}
+            />
+          )}
 
-              {images !== null && images.length === 0 && (
-                <p className="cedit__hint">No pictures are available to choose from.</p>
-              )}
-
-              {images !== null && images.length > 0 && (
-                <div className="cedit__gallery">
-                  {images.map((image) => (
-                    <button
-                      type="button"
-                      key={image.url}
-                      className={`cedit__galleryitem ${
-                        draftImage === image.url ? 'cedit__galleryitem--on' : ''
-                      }`}
-                      onClick={() => {
-                        setDraftImage(image.url)
-                        setStage(STAGE_EDIT)
-                      }}
-                      aria-pressed={draftImage === image.url}
-                      aria-label={`${image.name}, from ${image.folder}`}
-                    >
-                      <img className="cedit__galleryimg" src={image.url} alt="" loading="lazy" />
-                      <span className="cedit__galleryname">{image.name}</span>
-                    </button>
-                  ))}
+          {stage === DELETE_CONFIRM_FOLDER && activeFolder && (
+            <div className="cedit__form">
+              <div className="cedit__confirm">
+                <span className="cedit__thumb cedit__thumb--lg" aria-hidden="true">
+                  {activeFolder.imageUrl ? (
+                    <img className="cedit__thumb-img" src={activeFolder.imageUrl} alt="" />
+                  ) : (
+                    <span className="cedit__thumb-emoji">{activeFolder.emoji || '🗂️'}</span>
+                  )}
+                </span>
+                <div>
+                  <p className="cedit__confirm-title">Delete “{activeFolder.label}”?</p>
+                  <p className="cedit__confirm-text">
+                    {cardsHere.length === 0
+                      ? 'This folder is empty.'
+                      : `This folder contains ${cardsHere.length} ${
+                          cardsHere.length === 1 ? 'card' : 'cards'
+                        }. Deleting the folder will also delete ${
+                          cardsHere.length === 1 ? 'it' : 'them all'
+                        }.`}
+                  </p>
                 </div>
+              </div>
+
+              {problem && (
+                <p className="cedit__error" role="alert">
+                  {problem}
+                </p>
               )}
+
+              <div className="cedit__actions">
+                <button
+                  type="button"
+                  className="cedit__btn cedit__btn--cancel"
+                  onClick={goBack}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="cedit__btn cedit__btn--danger"
+                  onClick={confirmDeleteFolder}
+                  disabled={busy}
+                >
+                  {busy ? 'Deleting…' : 'Delete Folder'}
+                </button>
+              </div>
             </div>
           )}
+
         </div>
       </div>
     </div>

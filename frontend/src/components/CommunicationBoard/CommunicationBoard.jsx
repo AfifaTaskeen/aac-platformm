@@ -23,6 +23,7 @@ import { fetchBoard } from './boardApi'
  * and belongs beside the stylesheet rather than in a database document.
  */
 import { categoryColors } from './cardData'
+import { folderCoverUrl } from './folderCovers'
 import { speak, playAlert } from './speech'
 import './CommunicationBoard.css'
 
@@ -45,6 +46,16 @@ import './CommunicationBoard.css'
 
 /* Used when a profile somehow has no grid size. */
 const FALLBACK_GRID_SIZE = 3
+
+/*
+ * The key the Core Words folder is filed under.
+ *
+ * It matches the folder's colorKey, which is what boardApi uses as a
+ * category id. Core Words is deliberately excluded from the folder TILES but
+ * still present in cardsByCategory, so opening it by this key works exactly
+ * as opening any other folder does -- the same documents, no duplication.
+ */
+const CORE_WORDS_KEY = 'core'
 
 function CommunicationBoard({ childProfile }) {
   /*
@@ -450,11 +461,43 @@ function CommunicationBoard({ childProfile }) {
             onClick={() => openFolder(category.id)}
             aria-label={`Open ${category.label} folder`}
           >
-            <span className="ccard__imagebox ccard__imagebox--emoji">
-              <span className="ccard__emoji" aria-hidden="true">
-                {category.emoji}
+            {/*
+              A folder shows its PICTURE when it has one, and falls back to
+              its emoji when it does not.
+
+              The image branch was missing entirely, which is why a folder
+              created with a picture still showed only an emoji: the url was
+              fetched, carried through boardApi and origin-corrected for
+              display, and then never rendered.
+
+              The same two classes as a word card, so a folder with a picture
+              is laid out exactly like the cards inside it -- fixed square
+              area, object-fit: contain, no stretching.
+            */}
+            {/*
+              The folder's cover, in priority order (see folderCovers.js):
+                1. the caregiver's own image, if they customised this folder
+                2. the built-in cover shipped with the app
+                3. the emoji, if neither exists
+              Identical markup either way, so the tile keeps the same fixed
+              square area, object-fit and dimensions as every other card.
+            */}
+            {folderCoverUrl(category) ? (
+              <span className="ccard__imagebox">
+                <img
+                  className="ccard__image"
+                  src={folderCoverUrl(category)}
+                  alt=""
+                  draggable="false"
+                />
               </span>
-            </span>
+            ) : (
+              <span className="ccard__imagebox ccard__imagebox--emoji">
+                <span className="ccard__emoji" aria-hidden="true">
+                  {category.emoji}
+                </span>
+              </span>
+            )}
             <span className="ccard__label">{category.label}</span>
           </button>
         ))}
@@ -532,12 +575,19 @@ function CommunicationBoard({ childProfile }) {
            * explicitly, so the feature is not simply lost.
            */
           onSettings={() => setIsSettingsOpen(true)}
-          onCoreWords={() =>
-            setDialog({
-              title: 'Core Words',
-              message: 'Choosing which words appear as core words is coming next.',
-            })
-          }
+          /*
+           * Opens the Core Words folder in the card area, exactly as tapping
+           * a folder tile does -- because it IS a real folder in MongoDB,
+           * holding the same card documents the five quick-access words come
+           * from. This button is its only entry point: Core Words is
+           * deliberately absent from the folder tiles (see boardApi.js), so
+           * there is one way in, not two.
+           *
+           * It used to open a placeholder dialog, which is why the words
+           * never appeared: the data was always there and nothing ever asked
+           * for it.
+           */
+          onCoreWords={() => openFolder(CORE_WORDS_KEY)}
           onKeyboard={() => setIsKeyboardOpen((open) => !open)}
           isKeyboardOpen={isKeyboardOpen}
           onScrollUp={() => scrollCards(-1)}
