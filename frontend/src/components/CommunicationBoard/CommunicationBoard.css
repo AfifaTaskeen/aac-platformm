@@ -61,6 +61,21 @@
 .cboard__main {
   flex: 1;
   min-width: 0;
+  /*
+     A flex ITEM defaults to min-height:auto, which refuses to shrink below
+     its content. Every other container in this chain already sets
+     min-height:0 for exactly that reason; this one was missed.
+
+     It costs nothing in the side-by-side layout, where this box is a row
+     item and only its WIDTH is constrained. It matters at the phone
+     breakpoint, where .cboard__lower becomes a COLUMN: this box then
+     inherits the height constraint, and without min-height:0 it grew to the
+     full height of the card list (measured 7214px inside an 844px screen),
+     pushing the toolbar -- Alert, Core Words, Settings -- far below the
+     viewport, on a page that does not scroll. The scrolling already belongs
+     to .cboard__cards; this simply lets that scroll box be bounded.
+  */
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -1395,6 +1410,45 @@
   .cbtn {
     min-width: clamp(56px, 17vw, 76px);
   }
+
+  /*
+     THE SENTENCE GETS ITS OWN LINE.
+
+     .cbar__sentence is flex: 1 1 0% -- a zero basis, so in a row short of
+     space it is the item that yields FIRST and completely. On a 390px
+     phone the measurement is unambiguous: the panel is 373px wide, the
+     back arrow takes 91px, Speak/Delete/Clear take 213px between them and
+     the gaps take 32px. That is 336px of content that cannot shrink -- the
+     icons inside those buttons are 34px each on their own -- leaving 37px
+     for the sentence, which rendered "Tap cards to build a sentence" as a
+     vertical sliver one character wide.
+
+     There is no width to redistribute: the row genuinely does not fit.
+     Forcing it to (a sentence min-width) simply pushed Clear off the right
+     edge instead, which is worse -- a control the child cannot reach.
+
+     So the panel wraps. The sentence takes the full width on its own line
+     and the three buttons sit below it, all at their normal size and all
+     on screen. flex-basis: 100% is what makes the sentence claim a whole
+     line; the buttons then follow onto the next.
+
+     Scoped to this phone-width query, so every larger screen -- where the
+     single row does fit -- keeps exactly the layout it has now.
+  */
+  .cbar__panel {
+    flex-wrap: wrap;
+  }
+
+  .cbar__sentence {
+    flex-basis: 100%;
+  }
+
+  /* Centred under the sentence rather than trailing off to one side, now
+     that they occupy a line of their own. */
+  .cbar__actions {
+    justify-content: center;
+    width: 100%;
+  }
 }
 
 /* ==========================================================================
@@ -1516,7 +1570,30 @@
 .ccard__label {
   flex: none;
   width: 100%;
-  height: calc(2 * 1.12em);
+  /*
+     TWO LINES, MEASURED RATHER THAN ASSUMED.
+
+     This was calc(2 * 1.12em) -- two nominal line-heights. That arithmetic
+     is right only if a line box is exactly line-height tall, and with this
+     display face it is not: Baloo 2 carries tall intrinsic ascent/descent
+     metrics, so when line-height (1.12) is SMALLER than the font's own line
+     box, the browser uses the font's. Measured in Chrome at 27.85px:
+     one line 31.19px as declared, but two wrapped lines 69px -- 2.477em,
+     not 2.24em. Every two-line folder name ("Body & Health", "Food & Drink",
+     "Things & Objects") was therefore clipped by ~7px, cutting the
+     descenders off the second line.
+
+     Measured in Chrome across every grid size and text size, two wrapped
+     lines cost 2.621em. 1.32em per line (2.64em for two) covers that with a
+     hair of tolerance for rounding at other font sizes, without reserving
+     so much that a one-line card gains visible dead space.
+
+     It is still expressed in em, so it continues to track the Text Size
+     setting automatically and needs no value per setting -- the only thing
+     that changed is the per-line figure, from an assumed 1.12 to a measured
+     one.
+  */
+  height: calc(2 * 1.32em);
   line-height: 1.12;
 
   display: flex;
