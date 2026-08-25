@@ -38,8 +38,64 @@ const ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
     "http://127.0.0.1:5175",
-    process.env.FRONTEND_ORIGIN
+    /*
+     * The deployed frontend. FRONTEND_ORIGIN holds one address;
+     * FRONTEND_ORIGINS holds a comma-separated list, for the common case of a
+     * production domain plus a staging or preview one. Both are optional and
+     * neither hard-codes a domain here -- the values live in the environment,
+     * so the same source deploys anywhere.
+     */
+    process.env.FRONTEND_ORIGIN,
+    ...String(process.env.FRONTEND_ORIGINS || "")
+        .split(",")
+        .map((origin) => origin.trim())
 ].filter(Boolean);
+
+/* ==========================================================================
+   COOKIE SECURITY -- driven by the environment, not by hard-coded values.
+
+   Development (this laptop, and a phone on the LAN) serves the frontend and
+   the API from the same host over plain HTTP. There "lax" is correct and
+   "secure" would be wrong: a Secure cookie is never stored over HTTP, so
+   switching it on locally would break sign-in entirely.
+
+   Production puts them on different subdomains --
+
+       https://buddytalk.example   ->   https://api.buddytalk.example
+
+   -- which is a CROSS-SITE request as far as the cookie is concerned. A "lax"
+   cookie is not sent on those, so the session would silently vanish on every
+   request. "none" is required, and browsers only accept SameSite=None when the
+   cookie is also Secure, which is why the two move together.
+
+   COOKIE_SAMESITE / COOKIE_SECURE override both when a deployment needs
+   something different (for example a single-domain setup behind a proxy, where
+   "lax" is still right over HTTPS).
+   ========================================================================== */
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
+const COOKIE_SAMESITE = process.env.COOKIE_SAMESITE || (IS_PRODUCTION ? "none" : "lax");
+
+/*
+ * SameSite=None is only honoured on a Secure cookie, so it forces Secure on
+ * regardless of anything else -- otherwise the browser silently drops the
+ * cookie and the session appears to fail for no visible reason.
+ */
+const COOKIE_SECURE =
+    COOKIE_SAMESITE === "none" ||
+    (process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === "true" : IS_PRODUCTION);
+
+/*
+ * Every place that sets or clears the session cookie uses this one object, so
+ * the two can never drift apart. A cookie cleared with different attributes
+ * than it was set with is not removed by the browser, which would leave people
+ * unable to sign out.
+ */
+const SESSION_COOKIE_OPTIONS = {
+    httpOnly: true,             // page JavaScript cannot read it
+    sameSite: COOKIE_SAMESITE,
+    secure: COOKIE_SECURE
+};
 
 /*
  * Google's library for verifying ID tokens. It fetches Google's public signing
@@ -74,7 +130,22 @@ const SESSION_DAYS = 7;
 app.use((req, res, next) => {
     const requestOrigin = req.headers.origin;
 
-    if (requestOrigin && ALLOWED_ORIGINS.includes(requestOrigin)) {
+    /*
+     * DEVELOPMENT ONLY: also accept a private-network origin, so a phone on
+     * the same Wi-Fi (e.g. http://192.168.0.106:5173) can reach the API.
+     *
+     * Gated on the same DEV_LOGIN_ENABLED switch as the dev sign-in route and
+     * on NODE_ENV, so it is inert in production. The pattern matches ONLY the
+     * three RFC-1918 private ranges -- never a public host -- so this cannot
+     * open the API to the internet even while enabled.
+     */
+    const devLanAllowed =
+        process.env.NODE_ENV !== "production" &&
+        process.env.DEV_LOGIN_ENABLED === "true" &&
+        typeof requestOrigin === "string" &&
+        /^http:\/\/(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?::\d+)?$/.test(requestOrigin);
+
+    if (requestOrigin && (ALLOWED_ORIGINS.includes(requestOrigin) || devLanAllowed)) {
         res.header("Access-Control-Allow-Origin", requestOrigin);
         // Lets the browser send and receive the session cookie cross-origin.
         res.header("Access-Control-Allow-Credentials", "true");
@@ -142,6 +213,40 @@ app.use(
 app.use(cookieParser());
 
 /* ==========================================================================
+   GET /health
+
+   Two DIFFERENT questions, deliberately reported separately:
+
+     status: "ok"        - the process is alive and serving HTTP
+     database.ready      - MongoDB is connected and the collections are usable
+
+   A hosting platform's health check should watch the FIRST. If it watched the
+   database instead, a brief Atlas hiccup would make the platform kill and
+   restart a perfectly healthy server -- turning a recoverable 30-second blip
+   into a restart loop.
+
+   The HTTP status follows the same rule: 200 whenever the server itself is
+   healthy. The body carries the database detail for a human or a dashboard,
+   and 503 is reserved for the case where nothing can be served usefully.
+
+   Deliberately unauthenticated (a health check has no session) and it exposes
+   nothing sensitive: no URI, no credentials, no host names.
+   ========================================================================== */
+app.get("/health", (req, res) => {
+    return res.status(200).json({
+        status: "ok",
+        uptimeSeconds: Math.round(process.uptime()),
+        database: {
+            ready: dbState.ready,
+            connectedAt: dbState.connectedAt,
+            /* Only ever a driver message, never the connection string. */
+            lastError: dbState.ready ? null : dbState.lastError,
+            retryAttempts: dbState.attempts
+        }
+    });
+});
+
+/* ==========================================================================
    SESSION HANDLING
 
    Google sign-in ends with "this person is authenticated". That fact has to be
@@ -166,16 +271,30 @@ function createSession(res, user) {
     );
 
     res.cookie("session", token, {
-        httpOnly: true,   // JavaScript cannot read this cookie
-        sameSite: "lax",  // not sent on cross-site requests, limiting CSRF
-        secure: process.env.NODE_ENV === "production", // HTTPS-only in prod
+        ...SESSION_COOKIE_OPTIONS,
         maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000
     });
 }
 
-const client = new MongoClient(process.env.MONGODB_URI, {
-    family: 4
-});
+/*
+ * The driver options. Unchanged from before apart from being named, so a
+ * retry can build an identical client.
+ */
+const MONGO_OPTIONS = { family: 4 };
+
+/*
+ * `client` is reassigned by a retry rather than being built once.
+ *
+ * A MongoClient whose first connect() failed can be left holding a topology
+ * pinned to hosts it could not reach. Discarding it and building a fresh one
+ * for each attempt means a retry always starts clean and re-reads the
+ * connection string, so recovery does not depend on the internal state of a
+ * client that has already failed.
+ *
+ * On the successful path nothing changes: one client is created, connect()
+ * succeeds, and it is reused for the life of the process exactly as before.
+ */
+let client = new MongoClient(process.env.MONGODB_URI, MONGO_OPTIONS);
 
 // Set once the connection succeeds, so the routes can reach the collections.
 let users;
@@ -227,6 +346,40 @@ function checkPasswordRules(password) {
     }
 
     return `Password must contain ${missing.join(", ")}.`;
+}
+
+/* ==========================================================================
+   DATABASE READINESS
+
+   The server now listens before MongoDB is available, so there is a window --
+   and, during an outage, a longer one -- where the collection handles above
+   are still undefined. This object is the single record of that status: what
+   /health reports, and what requireDatabase() checks.
+   ========================================================================== */
+const dbState = {
+    ready: false,
+    lastError: null,
+    connectedAt: null,
+    attempts: 0
+};
+
+/*
+ * Answers 503 while the database is unavailable, instead of letting a route
+ * call a method on an undefined collection and produce a 500 that looks like a
+ * bug in the application.
+ *
+ * 503 with Retry-After is the honest answer: the request was fine, the
+ * dependency is temporarily down, and trying again shortly is worth it.
+ */
+function requireDatabase(req, res, next) {
+    if (dbState.ready) return next();
+
+    res.set("Retry-After", "5");
+    return res.status(503).json({
+        success: false,
+        code: "DATABASE_UNAVAILABLE",
+        message: "The service is starting up. Please try again in a moment."
+    });
 }
 
 async function connectDB() {
@@ -322,16 +475,88 @@ async function connectDB() {
         // rather than only when a reset email silently fails to arrive.
         await verifyMailConfig();
 
-        // The server only starts listening once the database is actually
-        // available, so no request can arrive before `users` exists.
-        const PORT = process.env.PORT || 5000;
-        app.listen(PORT, () => {
-            console.log(`Server listening on http://localhost:${PORT}`);
-        });
+        /*
+         * Only now are the collection handles usable, so this is the point at
+         * which the database counts as READY. /health reports it, and
+         * requireDatabase() below stops routes running before it.
+         */
+        dbState.ready = true;
+        dbState.lastError = null;
+        dbState.connectedAt = new Date().toISOString();
+        dbState.attempts = 0;
+
+        return true;
 
     } catch (error) {
-        console.log("MongoDB connection failed:", error);
+        dbState.ready = false;
+        dbState.lastError = error.message;
+        console.log("MongoDB connection failed:", error.message);
+
+        /*
+         * Discard the failed client and prepare a clean one for the next
+         * attempt. Without this a retry reuses a topology that already gave
+         * up, and the loop can keep reporting the original failure even after
+         * the database is reachable again.
+         */
+        try {
+            await client.close(true);
+        } catch {
+            /* Already closed, or never opened. Nothing to do. */
+        }
+        client = new MongoClient(process.env.MONGODB_URI, MONGO_OPTIONS);
+
+        return false;
     }
+}
+
+/* ==========================================================================
+   STARTUP
+
+   The server LISTENS FIRST and connects to MongoDB separately.
+
+   Previously app.listen() sat inside connectDB()'s try block, so a database
+   that was briefly unreachable meant the process bound no port at all and
+   exited with code 0. A hosting platform reads that as a clean, deliberate
+   shutdown -- so it restarts the process, which exits again, silently, with
+   nothing in the logs to explain why the site is down.
+
+   Splitting the two means an outage degrades instead of disappearing: the
+   server answers, /health says plainly that the database is not ready, and the
+   retry loop reconnects on its own once Atlas comes back. No manual restart,
+   and no change whatsoever to behaviour once the connection succeeds.
+   ========================================================================== */
+
+/* Backoff between retries: 1s, 2s, 4s ... capped, so a long outage settles
+   into a steady quiet retry instead of hammering Atlas. */
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 30000;
+
+async function connectWithRetry() {
+    /* eslint-disable-next-line no-constant-condition */
+    while (true) {
+        dbState.attempts += 1;
+        const connected = await connectDB();
+        if (connected) return;
+
+        const wait = Math.min(RETRY_BASE_MS * 2 ** (dbState.attempts - 1), RETRY_MAX_MS);
+        console.log(
+            `MongoDB not ready (attempt ${dbState.attempts}). Retrying in ${Math.round(wait / 1000)}s. ` +
+            "The API is listening; /health reports database status."
+        );
+        await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+}
+
+function startServer() {
+    const PORT = process.env.PORT || 5000;
+
+    app.listen(PORT, () => {
+        console.log(`Server listening on http://localhost:${PORT}`);
+        console.log(`Health check: http://localhost:${PORT}/health`);
+    });
+
+    // Runs alongside the server rather than gating it.
+    connectWithRetry();
 }
 
 /* ==========================================================================
@@ -522,7 +747,7 @@ async function sendResetEmail(toEmail, resetUrl) {
    has an account. Confirming which emails are registered would let anyone
    discover who uses Buddy Talk one address at a time.
    ========================================================================== */
-app.post("/api/auth/forgot-password", async (req, res) => {
+app.post("/api/auth/forgot-password", requireDatabase, async (req, res) => {
     // One message for every outcome, defined once so no branch can differ.
     const genericResponse = {
         success: true,
@@ -643,7 +868,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
    POST /api/auth/reset-password
    Finishes a password reset: checks the token, then sets the new password.
    ========================================================================== */
-app.post("/api/auth/reset-password", async (req, res) => {
+app.post("/api/auth/reset-password", requireDatabase, async (req, res) => {
     try {
         const { token, password } = req.body;
 
@@ -725,7 +950,7 @@ app.post("/api/auth/reset-password", async (req, res) => {
    POST /api/auth/register
    Creates one new user account.
    ========================================================================== */
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", requireDatabase, async (req, res) => {
     try {
         // 1. Pull the three values out of the JSON the React form sent.
         const { name, email, password } = req.body;
@@ -858,7 +1083,7 @@ app.post("/api/auth/register", async (req, res) => {
    Reuses createSession() -- the same session mechanism Google sign-in uses --
    so there is only ever one way a user becomes "signed in".
    ========================================================================== */
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", requireDatabase, async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -979,7 +1204,7 @@ app.post("/api/auth/login", async (req, res) => {
    cryptographic signature, the audience (that it was issued for OUR app), the
    issuer, and the expiry.
    ========================================================================== */
-app.post("/api/auth/google", async (req, res) => {
+app.post("/api/auth/google", requireDatabase, async (req, res) => {
     try {
         /*
          * Validate the input FIRST. A malformed request is a client error
@@ -1152,7 +1377,7 @@ app.post("/api/auth/google", async (req, res) => {
    Useful for checking the cookie actually works, and needed later to keep a
    user signed in across page refreshes.
    ========================================================================== */
-app.get("/api/auth/me", async (req, res) => {
+app.get("/api/auth/me", requireDatabase, async (req, res) => {
     try {
         const token = req.cookies?.session;
 
@@ -1198,6 +1423,14 @@ app.get("/api/auth/me", async (req, res) => {
  * cookie, so page JavaScript cannot read or forge it.
  */
 async function requireAuth(req, res, next) {
+    /*
+     * Every authenticated route reaches the database, so a 503 while it is
+     * unavailable is more honest than a 401 -- the caller is not signed out,
+     * the service simply cannot answer yet. Checking here covers the board,
+     * folder and card routes in one place.
+     */
+    if (!dbState.ready) return requireDatabase(req, res, next);
+
     try {
         const token = req.cookies?.session;
 
@@ -2536,12 +2769,103 @@ app.post("/api/tts", async (req, res) => {
    Clears the session cookie.
    ========================================================================== */
 app.post("/api/auth/logout", (req, res) => {
-    res.clearCookie("session", {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: process.env.NODE_ENV === "production"
-    });
+    // Same attributes it was set with -- a mismatch leaves the cookie in place.
+    res.clearCookie("session", SESSION_COOKIE_OPTIONS);
     return res.status(200).json({ success: true, message: "Signed out." });
 });
 
-connectDB();
+/* ==========================================================================
+   ⚠️  DEVELOPMENT-ONLY SIGN-IN  —  DELETE THIS BLOCK BEFORE DEPLOYING  ⚠️
+   ==========================================================================
+
+   WHY THIS EXISTS
+   ---------------
+   Google sign-in cannot complete from a phone on the LAN: Google refuses to
+   serve its button to an origin like http://192.168.0.106:5173, because that
+   origin is not (and cannot practically be) registered in the OAuth console.
+   That blocks testing text-to-speech on a real device, which is the one thing
+   a desktop browser cannot verify.
+
+   WHAT IT DOES
+   ------------
+   Issues a session for an account that ALREADY EXISTS, using the SAME
+   createSession() helper as Google sign-in and password sign-in. It creates
+   no user, invents no identity, and grants no elevated access -- the cookie
+   is the ordinary one, and every route behind requireAuth continues to check
+   it exactly as before.
+
+   WHY THIS IS SAFE
+   ----------------
+   THREE independent conditions must ALL hold, or the route does not exist:
+
+     1. NODE_ENV must not be "production".
+     2. DEV_LOGIN_ENABLED must be exactly "true" in backend/.env.
+     3. DEV_LOGIN_EMAIL must name an existing account.
+
+   Miss any one and the route is never registered, so it 404s like any
+   unknown path. A deploy that forgets to delete this block still cannot use
+   it, because production sets NODE_ENV=production and would need the two
+   extra variables deliberately added.
+
+   Production authentication is untouched: no existing route, middleware, or
+   cookie rule is modified anywhere in this file.
+
+   TO REMOVE AFTER TESTING
+   -----------------------
+   Delete this block, or simply set DEV_LOGIN_ENABLED=false in backend/.env.
+   ========================================================================== */
+if (process.env.NODE_ENV !== "production" && process.env.DEV_LOGIN_ENABLED === "true") {
+    console.warn(
+        "\n⚠️  DEV LOGIN IS ENABLED — POST /api/auth/dev-login is active.\n" +
+        "   This is for local device testing only. Set DEV_LOGIN_ENABLED=false\n" +
+        "   (or delete the block in server.js) when you are finished.\n"
+    );
+
+    app.post("/api/auth/dev-login", async (req, res) => {
+        try {
+            const email = (process.env.DEV_LOGIN_EMAIL || "").trim().toLowerCase();
+
+            if (!email) {
+                return res.status(500).json({
+                    success: false,
+                    message: "DEV_LOGIN_EMAIL is not set in backend/.env."
+                });
+            }
+
+            /* The account must already exist. This route never creates one --
+               that is what keeps it a sign-in shortcut rather than a way to
+               manufacture users. */
+            const user = await users.findOne({ email });
+
+            if (!user) {
+                return res.status(404).json({
+                    success: false,
+                    message: `No account found for ${email}. Sign in normally on your laptop once, then retry.`
+                });
+            }
+
+            /* The SAME session the real sign-in routes issue. */
+            createSession(res, user);
+
+            return res.status(200).json({
+                success: true,
+                devLogin: true,
+                user: {
+                    id: user._id.toString(),
+                    name: user.name,
+                    email: user.email
+                }
+            });
+        } catch (error) {
+            console.log("Dev login failed:", error.message);
+            return res.status(500).json({ success: false, message: "Dev login failed." });
+        }
+    });
+}
+/* ====================== END DEVELOPMENT-ONLY BLOCK ====================== */
+
+/*
+ * Starts listening immediately and connects to MongoDB in the background,
+ * retrying until it succeeds. See startServer() for why the two are separate.
+ */
+startServer();

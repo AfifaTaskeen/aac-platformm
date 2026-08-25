@@ -24,7 +24,7 @@ import { fetchBoard } from './boardApi'
  */
 import { categoryColors } from './cardData'
 import { folderCoverUrl } from './folderCovers'
-import { speak, playAlert } from './speech'
+import { speakText, playAlert } from './speech'
 import './CommunicationBoard.css'
 
 /*
@@ -175,12 +175,31 @@ function CommunicationBoard({ childProfile }) {
     typeof window === 'undefined' ? 1024 : window.innerWidth,
   )
 
+  /*
+   * Viewport HEIGHT, tracked for the same reason as the width above.
+   *
+   * A phone in landscape is wide but very short -- ~318px of page once
+   * Android Chrome's URL bar is showing -- and the column count has to know
+   * that. Width alone would put a landscape phone in the same bucket as a
+   * tablet and produce cards taller than the whole scroll area.
+   */
+  const [boardHeight, setBoardHeight] = useState(
+    typeof window === 'undefined' ? 768 : window.innerHeight,
+  )
+
   useEffect(() => {
     function onResize() {
       setBoardWidth(window.innerWidth)
+      setBoardHeight(window.innerHeight)
     }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    /* Rotating a phone fires orientationchange; on some Android builds the
+       resize that follows reports the OLD height, so both are listened for. */
+    window.addEventListener('orientationchange', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.removeEventListener('orientationchange', onResize)
+    }
   }, [])
 
   /*
@@ -215,6 +234,22 @@ function CommunicationBoard({ childProfile }) {
    * exceptions written around it.
    */
   function columnsForWidth(width) {
+    /*
+     * SHORT LANDSCAPE (a phone on its side) is decided by HEIGHT, not width.
+     *
+     * Such a screen is wide -- 844px or more -- so the width rules below
+     * would give it 3 columns, and a 3-column card on an 844px board is
+     * ~273px tall against a card area of ~141px: not even one full row
+     * visible, so the child cannot see a whole card without scrolling.
+     *
+     * More columns means narrower columns, and card height follows column
+     * width through the picture's ratio, so 5 columns is what brings a card
+     * close to the available height. It matches the CSS query exactly
+     * (orientation: landscape and max-height: 500px) so the two cannot
+     * disagree about which layout is in force.
+     */
+    if (boardHeight <= 500 && width > boardHeight) return 5
+
     if (width <= 700) return 2
     if (width >= 1300) return 5
     if (width >= 1000) return 4
@@ -269,10 +304,19 @@ function CommunicationBoard({ childProfile }) {
    * applied to the freshest state, so two taps in the same frame cannot
    * both read the same stale array and drop one of the words.
    *
-   * Speech is deliberately NOT here yet; that is a later feature.
+   * The word is also spoken immediately, so the child hears what they chose
+   * without pressing anything else -- for a child still matching a picture to
+   * its word, that instant confirmation is most of the point of the card.
+   *
+   * interrupt: false is deliberate. A sentence the child asked to hear is
+   * never cut off by a card tapped while it plays, and a fast run of taps
+   * speaks the first word rather than queueing a backlog that leaves the
+   * board narrating long after the child has moved on. The card is added
+   * either way: the sentence never depends on whether the sound played.
    */
   function handleSelectCard(card) {
     setSentence((current) => [...current, card])
+    speakText(card.label, { voicePreference, interrupt: false })
   }
 
   /* Typed words become the same shape as a card, so everything downstream
@@ -285,8 +329,13 @@ function CommunicationBoard({ childProfile }) {
   }
 
   function handleSpeak() {
+    /* The whole sentence, in tap order, as one utterance -- so it is read
+       with sentence intonation rather than as disconnected words. */
     const text = sentence.map((word) => word.label).join(' ')
-    const started = speak(text, voicePreference)
+
+    /* interrupt: true -- pressing Speak means "say this now", so anything
+       still playing (including a word from the card just tapped) stops. */
+    const started = speakText(text, { voicePreference, interrupt: true })
 
     if (!started) {
       setDialog({
@@ -355,11 +404,82 @@ function CommunicationBoard({ childProfile }) {
        fitting grid into a scrolling one. */
     window.addEventListener('resize', updateScrollState)
 
+    /*
+     * ...and whenever the CONTENT's height changes, which is the case the
+     * two listeners above both miss.
+     *
+     * Card images are lazy-loaded. At mount the grid is only as tall as its
+     * empty boxes, so scrollHeight barely exceeds clientHeight and Down is
+     * computed as "nothing to scroll" -- and it stays disabled, because
+     * neither a scroll nor a resize ever follows. Measured on a 390x732
+     * Android viewport: scrollHeight 2092 vs clientHeight 406, yet Down was
+     * disabled until a resize event was fired by hand.
+     *
+     * A ResizeObserver on the scroll container and on the grid inside it
+     * re-measures as the images arrive, so Up/Down become enabled exactly
+     * when there really is something to scroll.
+     */
+    let observer = null
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateScrollState)
+      observer.observe(el)
+      const grid = el.querySelector('.cboard__grid')
+      if (grid) observer.observe(grid)
+    }
+
+    /*
+     * WHY THE OBSERVER ALONE IS NOT ENOUGH -- measured, not assumed.
+     *
+     * A timeline captured on a 390x732 Android viewport:
+     *
+     *   t=4197ms   scrollHeight 406 == clientHeight 406   (nothing to scroll)
+     *   t=6150ms   scrollHeight 2092                      (the real content)
+     *
+     * The effect runs at the first moment, when the container genuinely has
+     * nothing to scroll, so `false` was the CORRECT answer then. The content
+     * arrives two seconds later -- and no scroll, no resize, and no size
+     * change to any observed BOX accompanies it, so nothing ever recomputed
+     * and Down stayed disabled for good. A single real scroll event enabled
+     * it instantly, which is what proved the state, not the maths, was stale.
+     *
+     * So the growth itself has to be watched. scrollHeight is not observable
+     * directly, so this samples it briefly after mount: every 250ms until it
+     * stops changing, and never longer than 5s. That is a handful of cheap
+     * reads during the load and then nothing -- no permanent timer.
+     */
+    let lastHeight = el.scrollHeight
+    const poll = setInterval(() => {
+      const h = el.scrollHeight
+      if (h !== lastHeight) {
+        lastHeight = h
+        updateScrollState()
+      }
+    }, 250)
+    /*
+     * Runs for a fixed 8 seconds and then stops -- deliberately NOT
+     * "until the height stops changing".
+     *
+     * An earlier version gave up after the height had been stable for one
+     * second, which looked tidy and was wrong: the measured timeline shows
+     * the poll starting at t=4806ms and the content arriving at t=5972ms,
+     * with a quiet second in between. The early-exit fired during that gap,
+     * so the poll was already cancelled when the content finally grew.
+     *
+     * A fixed window cannot make that mistake. Eight seconds of one cheap
+     * property read every 250ms is ~32 reads during startup, then nothing.
+     */
+    const pollCap = setTimeout(() => clearInterval(poll), 8000)
+
     return () => {
       el.removeEventListener('scroll', updateScrollState)
       window.removeEventListener('resize', updateScrollState)
+      if (observer) observer.disconnect()
+      clearInterval(poll)
+      clearTimeout(pollCap)
     }
-  }, [updateScrollState])
+    /* openCategory is a dependency so the observer re-attaches to the NEW
+       grid element when the child opens a different folder. */
+  }, [updateScrollState, openCategory, isKeyboardOpen])
 
   /* Moves the card area by most of a screenful, keeping a little overlap so
      the child does not lose their place. */
@@ -371,6 +491,20 @@ function CommunicationBoard({ childProfile }) {
 
   function openFolder(categoryId) {
     setOpenCategory(categoryId)
+    /*
+     * Opening a folder always leaves the keyboard.
+     *
+     * renderCardArea() checks isKeyboardOpen FIRST, so while the keyboard is
+     * up it wins over whatever category is selected. Setting the category
+     * without clearing this flag changed the state but not the screen: Core
+     * Words and Alert appeared to do nothing, because the keyboard was still
+     * drawn over the cards they had just opened.
+     *
+     * Clearing it here rather than in each caller means every route into a
+     * folder -- Core Words, Alert, and tapping a folder card -- behaves the
+     * same way, and a future one cannot forget.
+     */
+    setIsKeyboardOpen(false)
     // Start a new folder at the top rather than wherever the last one was.
     if (cardAreaRef.current) cardAreaRef.current.scrollTop = 0
   }

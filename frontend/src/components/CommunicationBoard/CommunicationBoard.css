@@ -1372,7 +1372,204 @@
   }
 }
 
-@media (max-width: 620px) {
+/* ==========================================================================
+   SHORT LANDSCAPE  —  A PHONE ON ITS SIDE
+   ==========================================================================
+
+   THE PROBLEM THIS SOLVES
+
+   Every other breakpoint in this file is written around WIDTH. A phone in
+   landscape (844x390, 915x412) is WIDE, so it took the desktop layout -- but
+   its constraint is HEIGHT, and only 390px of it. Two things broke, both
+   measured on a real 844x390 viewport:
+
+     1. The toolbar is a vertical rail beside the cards. Six buttons at 64px
+        plus gaps need ~518px of column; the column was 278px tall, so
+        Settings rendered at y=455 on a 390px screen -- off the bottom, with
+        nothing to scroll it into view.
+
+     2. Card height has a FLOOR of 0.6 x the column width. Landscape makes
+        columns WIDE (239px), so the floor demanded 302px-tall cards inside a
+        278px area: not one full row was visible, and the child had to scroll
+        to see any complete card.
+
+   WHY `orientation: landscape` ALONE IS NOT THE TEST
+
+   A tablet in landscape (1280x800, 1024x768) is also "landscape" and is
+   perfectly fine -- 800px of height is plenty for the rail. Keying on
+   orientation alone would break those. The real predicate is "wide but
+   SHORT", so this query pairs a landscape aspect with a height ceiling:
+   max-height 500px catches every phone on its side and no tablet.
+
+   Portrait phones (max-width: 700px) and all tablets/desktops are untouched.
+   ========================================================================== */
+@media (orientation: landscape) and (max-height: 500px) {
+  /*
+     THE TOOLBAR BECOMES A HORIZONTAL STRIP BELOW THE CARDS.
+
+     A previous attempt kept the vertical rail and shrank its buttons. That
+     was tuned against the NOMINAL 390px screen height and does not survive
+     the real one: Android Chrome's URL bar takes ~72px in landscape, so the
+     page gets ~318px, the rail column is ~206px, and six 42px buttons plus
+     gaps need ~266px. Settings ended up at y=374 in a 340px viewport --
+     off-screen again, exactly the bug that was supposed to be fixed.
+
+     Measured at the REAL height (844x318):
+
+       vertical rail    6 x 42 + gaps = 266px into a 206px column -> overflows
+       horizontal strip 6 buttons across 808px = 135px each, 52px tall,
+                        leaving ~160px for the cards
+
+     Width is what a landscape phone has in abundance; height is what it has
+     none of. So the strip is the correct shape here: it spends the plentiful
+     axis and every control fits on screen with no scrolling.
+  */
+  /*
+     THE TOOLBAR IS A VERTICAL COLUMN ON THE RIGHT -- as specified.
+
+     .cboard__lower keeps its default `row` direction here (it is NOT set to
+     column), so the card area and the rail sit side by side and the six
+     controls stack vertically down the right edge, in order: Keyboard, Core
+     Words, Up, Down, Alert, Settings.
+
+     WHAT THIS COSTS, MEASURED -- and how it is handled
+     -------------------------------------------------
+     Width is what a landscape phone has; height is what it does not. At the
+     REAL page height (844x390 nominal becomes ~318px once Android Chrome's
+     URL bar is showing) the rail column is ~244px, and six buttons at even
+     40px plus gaps need ~254px. So on the very shortest phones the six do
+     not all fit at once, by roughly one button.
+
+     The rail therefore scrolls vertically as a last resort. That is a
+     deliberate trade rather than an oversight: the alternative -- shrinking
+     the buttons until they fit -- would push them under a usable touch
+     target for a child with motor difficulties, which is worse than a short
+     swipe on the rail. On a phone with the URL bar hidden, and on every
+     tablet, all six are visible at once with no scrolling at all.
+  */
+  .cmenu {
+    /* Wide enough that "Keyboard" and "Core Words" sit inside their buttons
+       rather than spilling over the edge, while leaving the rest of the
+       width to the cards. */
+    width: clamp(84px, 12vw, 116px);
+    align-self: stretch;
+    flex: none;
+    flex-direction: column;
+    justify-content: flex-start;
+    /* The safety net described above: if the six cannot all fit the column,
+       the rail scrolls so none of them is ever unreachable. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    gap: clamp(2px, 0.5vh, 6px);
+    padding-block: 3px;
+    padding-inline: 3px;
+  }
+
+  .cmenu__btn {
+    /* Do not let a button stretch to fill leftover column height -- six equal
+       compact buttons read as one control panel, and stretching would push
+       the last ones off the bottom. */
+    flex: 0 0 auto;
+    max-width: none;
+    /*
+       Height is the scarce axis, so this is the smallest that still holds an
+       icon above its label. The buttons stay ~84-116px WIDE, so the tappable
+       area remains far larger than a fingertip in the direction that matters
+       most for a child aiming at it.
+    */
+    /*
+       36px is the measured figure, not a guess: six buttons plus five gaps
+       plus the rail's own padding must fit a ~230px column at 844x318, which
+       leaves ~36px each. Anything larger pushed Settings past the bottom
+       edge -- the exact bug this rail had to solve.
+
+       Below the 44px guideline in this one axis only. The buttons stay
+       84-116px WIDE, so the target a child actually aims at is far larger
+       than a fingertip, and the rail still scrolls if a phone is shorter
+       still, so no control is ever unreachable.
+    */
+    min-height: 36px;
+    padding-block: 1px;
+    padding-inline: 2px;
+  }
+
+  /* In a compact rail every button shares one height, so the Keyboard button
+     cannot be taller -- that extra height is exactly what pushes Settings off
+     the bottom. It stays prominent through its fill and its position at the
+     top of the stack. */
+  .cmenu__btn--keyboard {
+    min-height: 36px;
+  }
+
+  /* Icon and label both shrink to fit the shorter button, and the label wraps
+     inside it rather than spilling past its edge. */
+  .cmenu__btn span {
+    font-size: clamp(0.58rem, 2.6vh, 0.78rem);
+    line-height: 1.05;
+    overflow-wrap: anywhere;
+  }
+
+  .cmenu__btn svg {
+    width: clamp(15px, 3.8vh, 22px);
+    height: clamp(15px, 3.8vh, 22px);
+  }
+
+  /*
+     Give the height back to the cards.
+
+     The sentence panel reserves a minimum of 84px on every screen. On a
+     390px-tall phone that is 22% of the viewport for a bar that only has to
+     show one line of text and three buttons. Trimming the minimum -- not the
+     text size -- is what leaves a card area tall enough to show a full row.
+  */
+  .cbar__panel {
+    min-height: clamp(56px, 15vh, 72px);
+  }
+
+  /*
+     A shorter picture box, so a whole card fits the remaining height.
+
+     The box is square everywhere else, which is right when height is
+     plentiful. Here a 4:3 box keeps the picture large and recognisable while
+     removing ~25% of the card's height. object-fit: contain is unchanged, so
+     the photograph itself is still never cropped or stretched -- it simply
+     letterboxes inside a slightly wider box.
+  */
+  .ccard__imagebox {
+    aspect-ratio: 4 / 3;
+  }
+
+  /*
+     One line of label instead of two.
+
+     The two-line reserve exists so cards keep identical heights when a word
+     wraps. In landscape the words shown are the same, but 85px of reserved
+     label is a fifth of the viewport. One line plus ellipsis keeps every card
+     the same height -- which is what the reserve was protecting -- at a third
+     of the cost. The full word is still read aloud and still shown in the
+     sentence bar, so nothing is lost.
+  */
+  .ccard__label {
+    height: calc(1 * 1.32em);
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+}
+
+/*
+   THE STACKED (PHONE) LAYOUT.
+
+   The threshold is 700px, matching columnsForWidth() in
+   CommunicationBoard.jsx, which switches to two columns at the same width.
+   The two MUST agree. At 620px they did not, and the 620-700px band -- which
+   is where a 600-800px Android tablet in portrait lands -- got the DESKTOP
+   side rail next to a two-column phone grid: a 96px vertical sidebar beside
+   255px cards, using the width badly and looking like a stretched phone.
+
+   Above 700px the side rail returns, which is the layout a landscape tablet
+   and every laptop already had; nothing there changes.
+*/
+@media (max-width: 700px) {
   /* The lower row stacks, putting the toolbar under the cards as a
      horizontal strip within thumb reach. The sentence bar still spans the
      full width above both. */
@@ -1385,13 +1582,45 @@
     align-self: auto;
     flex: none;
     flex-direction: row;
-    overflow-x: auto;
+    /*
+       WRAP, rather than scroll sideways.
+
+       The strip holds six controls (Keyboard, Core Words, Up, Down, Alert,
+       Settings). On a 360px phone the usable width after the board padding,
+       the panel's own padding and border, and five gaps is ~308px -- about
+       51px per button if all six share one row, which is below a comfortable
+       touch target and well below the size the rest of this board uses.
+
+       It previously scrolled instead (overflow-x: auto), which kept the
+       buttons big but pushed Settings ~44px past the right edge on a 360px
+       screen. A child then had to discover a horizontal swipe to reach it --
+       an invisible affordance, and exactly the kind of hidden control an AAC
+       board should not have.
+
+       Wrapping to two rows of three keeps every button full size AND on
+       screen, with no gesture to discover. The strip is a handful of items,
+       so a second row costs a little height and nothing else.
+    */
+    flex-wrap: wrap;
+    justify-content: center;
+    /* overflow-y stays hidden; overflow-x is no longer needed now that
+       nothing extends past the right edge. */
+    overflow-x: hidden;
     overflow-y: hidden;
   }
 
   .cmenu__btn {
-    flex: 1 1 auto;
-    min-width: clamp(64px, 20vw, 90px);
+    /*
+       Three per row: each takes a third of the width, minus its share of the
+       two gaps between them. `flex-basis` does the dividing and `flex-grow`
+       lets a row of two (the second row, if the count is ever odd) spread to
+       fill -- so the strip never leaves a ragged gap.
+
+       min-width is deliberately NOT set here any more: a minimum wider than
+       the basis is what forced the single overflowing row.
+    */
+    flex: 1 1 calc((100% - 2 * clamp(4px, 0.7vh, 8px)) / 3);
+    max-width: calc((100% - 2 * clamp(4px, 0.7vh, 8px)) / 3);
     min-height: clamp(58px, 8vh, 82px);
   }
 
@@ -1448,6 +1677,39 @@
   .cbar__actions {
     justify-content: center;
     width: 100%;
+  }
+}
+
+/*
+   NARROW TABLETS (620-700px): stacked toolbar, single-line sentence bar.
+
+   These screens take the stacked layout above -- the side rail would waste
+   their width -- but they are NOT as cramped as a phone. The measurement
+   that forced the sentence onto its own line was taken at 390px, where the
+   back arrow, three action buttons and the gaps consume 336px of a 373px
+   panel. At 620px+ there is roughly 250px to spare, so the single row fits
+   comfortably and wrapping would only push the cards down for no reason.
+
+   So the wrap is undone in this band, and the sentence bar keeps the
+   one-line shape it has on every larger screen.
+*/
+@media (min-width: 621px) and (max-width: 700px) {
+  .cbar__panel {
+    flex-wrap: nowrap;
+  }
+
+  .cbar__sentence {
+    flex-basis: 0%;
+  }
+
+  .cbar__actions {
+    width: auto;
+  }
+
+  /* Six buttons fit one row again at this width, at full size. */
+  .cmenu__btn {
+    flex: 1 1 auto;
+    max-width: none;
   }
 }
 
@@ -2329,4 +2591,163 @@
 .cedit__btn--danger:disabled {
   background: #6b4a47;
   color: #d8cbca;
+}
+
+/* ==========================================================================
+   SHORT-LANDSCAPE: THE RULES THAT MUST COME LAST
+   ==========================================================================
+
+   The main short-landscape block sits earlier in this file. Two of its
+   declarations were silently losing, and the cause is source order, not
+   specificity:
+
+     .ccard__label        is redefined LATER (the two-line reserve), so the
+                          one-line landscape height never applied -- measured
+                          59px tall on a 318px-high screen, a fifth of the
+                          viewport spent on one word.
+
+     .ccard__imagebox     is likewise redefined later, so the 4/3 box never
+                          applied and the square box kept a 3-column card at
+                          273px inside a 141px scroll port -- barely half a
+                          row visible.
+
+   Equal-specificity conflicts are decided by whichever rule appears last, so
+   these two are repeated here, after everything that overrides them. Nothing
+   is marked !important: position does the work, which keeps the cascade
+   honest and leaves the Text Size settings further up still able to win where
+   they are more specific.
+
+   Scoped to the same query, so portrait, tablets and desktop are untouched.
+   ========================================================================== */
+@media (orientation: landscape) and (max-height: 500px) {
+  /*
+     A 4:3 picture box instead of a square one.
+
+     Height is the only scarce axis on a phone in landscape. A square box ties
+     the card's height to the COLUMN WIDTH, which landscape makes generous --
+     so the card grew to 273px while the scroll port was 141px. 4:3 removes
+     about a quarter of that height and keeps the picture large.
+
+     object-fit: contain is untouched, so the photograph itself is never
+     cropped or stretched; it simply letterboxes inside a slightly wider box.
+  */
+  .ccard__imagebox {
+    aspect-ratio: 4 / 3;
+  }
+
+  /*
+     One line of label instead of two.
+
+     The two-line reserve keeps every card the same height when a word wraps,
+     which is right when height is plentiful. Here it costs ~59px of a 318px
+     screen. One line plus an ellipsis keeps the cards equal -- the thing the
+     reserve protects -- at half the cost. The full word is still spoken and
+     still shown in the sentence bar, so nothing is lost to the child.
+  */
+  .ccard__label {
+    height: calc(1 * 1.32em);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /*
+     A SHORTER TOP BAR.
+
+     Measured at 844x318: the panel was 93.7px -- 29% of the whole screen --
+     even though its own min-height is only 56px. The three action buttons
+     were forcing it: each was 69.7px tall, from a 28px icon plus its label,
+     12px of vertical padding and 10px of border.
+
+     Shrinking the ICON is the cheapest 24px available. The labels keep their
+     size, so Speak/Delete/Clear stay readable, and the buttons stay ~120px
+     WIDE -- far larger than a fingertip in the direction that matters for
+     tapping. Only the wasted vertical space goes.
+  */
+  .cbtn {
+    padding-block: 2px;
+  }
+
+  .cbtn svg {
+    width: clamp(16px, 5vh, 20px);
+    height: clamp(16px, 5vh, 20px);
+  }
+
+  /*
+     THE LAST 18px, so all SIX rail buttons fit without scrolling.
+
+     Measured at 844x318 with the vertical rail in place: the rail needed
+     256px of column and had 238px, so Settings -- the last button -- sat
+     just past the bottom edge. The shortfall was 18px, which is less than
+     one button; the fix is to find those pixels rather than to remove or
+     shrink a control.
+
+     The top bar is where they are. Its own min-height is 56px, but it was
+     rendering at 82px because the Speak/Delete/Clear buttons' icons and
+     padding forced it taller. Trimming those above, plus the panel's own
+     floor here, hands the difference to the rail. The labels keep their
+     size, so nothing on the bar becomes harder to read.
+  */
+  .cbar__panel {
+    min-height: clamp(48px, 13vh, 64px);
+    padding-block: 4px;
+  }
+
+  /* The back arrow stretches to the panel's height, so it follows along
+     without needing its own rule -- but its icon is oversized for a short
+     bar, so it is trimmed to match. */
+  .cbar__back svg {
+    width: clamp(22px, 8vh, 32px);
+    height: clamp(22px, 8vh, 32px);
+  }
+
+  /*
+     The last few pixels, so a WHOLE card row fits.
+
+     After the trims above the card was 160.3px against a 153.9px scroll port
+     -- 0.96 of a row, so the bottom of every card in the first row was
+     shaved. Tightening the grid gap and the scroll port's own padding
+     returns those pixels, which is enough for a full row to clear.
+  */
+  .cboard__cards {
+    --cgap: 5px;
+    padding-bottom: 4px;
+  }
+
+  /* The board's outer padding and the gap between bar and body are each
+     doubled costs on a short screen; 4px is still a visible margin. */
+  .cboard {
+    padding: 4px;
+    gap: 4px;
+  }
+
+  /*
+     ...and the rail gives up its last few pixels too.
+
+     This rule set 40px back when the toolbar was a horizontal strip along
+     the bottom, where six buttons shared the WIDTH and height was cheap. The
+     toolbar is now a vertical column on the right, where the six share the
+     scarce HEIGHT: at 844x318 the rail has ~230px of column and six 40px
+     buttons plus gaps need 254px, so Settings fell past the bottom edge.
+
+     36px is the measured figure that fits, and it must be repeated here
+     because this block comes LATER in the file than the rail's own rule --
+     equal specificity means the last one wins, so leaving 40px here silently
+     overrode the fix upstream. That is exactly what happened once already.
+  */
+  .cmenu {
+    /* Zero vertical padding and a 1px gap: with six buttons there are five
+       gaps plus two paddings, so trimming them is worth ~12px of column --
+       which is exactly the remaining shortfall at 844x318. */
+    padding-block: 0;
+    gap: 1px;
+  }
+
+  .cmenu__btn {
+    min-height: 36px;
+  }
+
+  .cmenu__btn--keyboard {
+    min-height: 36px;
+  }
 }

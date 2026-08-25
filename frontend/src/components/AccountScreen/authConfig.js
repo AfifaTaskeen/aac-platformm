@@ -31,7 +31,37 @@
  * The fallback keeps `npm run dev` working with no .env file at all, which is
  * how the project has run until now.
  */
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+/*
+ * Where the API lives.
+ *
+ *   1. VITE_API_URL, if set -- an explicit setting always wins.
+ *   2. DEVELOPMENT ONLY: when the page is being served from a private-network
+ *      address (a phone on the same Wi-Fi opening http://192.168.0.106:5173),
+ *      "localhost" would mean the PHONE, not this laptop, and every request
+ *      would fail. So the API is addressed at the same host the page came
+ *      from, on the backend's port.
+ *   3. localhost:5000 -- unchanged for normal desktop development.
+ *
+ * Case 2 only ever triggers for RFC-1918 addresses, so a deployed build on a
+ * public domain still falls through to the explicit VITE_API_URL it is given.
+ */
+const BACKEND_PORT = 5000
+
+function inferApiBase() {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  if (typeof window === 'undefined') return `http://localhost:${BACKEND_PORT}`
+
+  const host = window.location.hostname
+  const isPrivateLan =
+    /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
+    /^172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)
+
+  if (isPrivateLan) return `http://${host}:${BACKEND_PORT}`
+  return `http://localhost:${BACKEND_PORT}`
+}
+
+export const API_BASE_URL = inferApiBase()
 
 /*
  * A deliberately forgiving email check: something, an @, something, a dot,

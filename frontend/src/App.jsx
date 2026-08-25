@@ -60,6 +60,22 @@ function App() {
   const [authView, setAuthView] = useState(resetToken ? 'reset' : 'account')
 
   /*
+   * Has the "are we already signed in?" question been answered yet?
+   *
+   * The session lives in an httpOnly cookie, which page JavaScript deliberately
+   * CANNOT read. So on a fresh page load the app genuinely does not know
+   * whether anyone is signed in until it asks the backend -- and until then,
+   * `user` being null does not mean "signed out", it means "not asked yet".
+   *
+   * Rendering the sign-in form during that gap is what made every refresh look
+   * like the session had ended: the cookie was valid the whole time, nothing
+   * ever asked about it. This flag keeps the app on the splash/loading screen
+   * for that one request instead of flashing a login form at someone who is
+   * already signed in.
+   */
+  const [isRestoringSession, setIsRestoringSession] = useState(true)
+
+  /*
    * Where a signed-in user goes next:
    *   'checking' - asking the backend whether a child profile exists
    *   'profile'  - no profile yet, or the user is editing one
@@ -67,6 +83,59 @@ function App() {
    */
   const [stage, setStage] = useState('checking')
   const [childProfile, setChildProfile] = useState(null)
+
+  /*
+   * SESSION RESTORE -- runs once, before anything is shown.
+   *
+   * Asks the backend "who am I?", which is the only way to find out: the
+   * session is an httpOnly cookie the browser attaches automatically and
+   * JavaScript cannot inspect. `credentials: 'include'` is what makes the
+   * browser send it, exactly as the other authenticated requests do.
+   *
+   * 200 means the cookie is valid -> restore the user, and the effect below
+   * then loads their child profile, landing them back on the board.
+   * 401 means no session (or an expired one) -> fall through to sign-in.
+   *
+   * Nothing is stored on the client: no token, no email, no password. The
+   * cookie remains the single source of truth and stays unreadable to scripts.
+   * A brand-new account is not affected -- registration sets `user` directly
+   * and this has already finished by then.
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    async function restoreSession() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+          credentials: 'include',
+        })
+
+        if (cancelled) return
+
+        if (response.ok) {
+          const data = await response.json()
+          if (!cancelled && data?.success && data.user) {
+            setUser(data.user)
+          }
+        }
+      } catch (error) {
+        /*
+         * The backend is unreachable. That is not the same as "signed out",
+         * but there is nothing better to show than the sign-in screen, and
+         * a failed restore must never leave the app stuck on "Loading…".
+         */
+        if (!cancelled) console.log('Could not restore the session:', error)
+      } finally {
+        if (!cancelled) setIsRestoringSession(false)
+      }
+    }
+
+    restoreSession()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   /*
    * Runs whenever someone becomes signed in.
@@ -165,6 +234,18 @@ function App() {
 
   if (phase !== 'done') {
     return <SplashScreen isLeaving={phase === 'leaving'} />
+  }
+
+  /*
+   * The session check is still in flight. Holding the splash here rather than
+   * rendering the sign-in form means an already-signed-in user never sees a
+   * login screen flash before their board appears.
+   *
+   * In practice this is usually invisible: the request is answered long before
+   * the splash finishes. It only shows on a genuinely slow connection.
+   */
+  if (isRestoringSession) {
+    return <SplashScreen isLeaving={false} />
   }
 
   /* Signed in: decide between profile setup and the board. */

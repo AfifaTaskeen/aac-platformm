@@ -192,6 +192,36 @@ body {
   overscroll-behavior: none;
 }
 
+/*
+   TOUCH RELIABILITY ON ANDROID.
+
+   Every control is inside a scrollable region (the card area, or the toolbar
+   rail which scrolls when short). On a touch screen the browser must decide
+   whether a finger down is a TAP or the start of a SCROLL, and by default it
+   waits ~300ms to find out. If the finger moves even slightly in that window
+   -- which it does, on a child's tap, or on any tap near a scroll container's
+   edge -- the gesture is claimed as a scroll and the click never fires. The
+   button looks and measures as perfectly clickable; it simply never receives
+   the event.
+
+   `manipulation` tells the browser there is no double-tap-to-zoom to wait
+   for on these elements, so a tap is dispatched immediately rather than
+   being held pending. Panning and pinch-zoom on the page are unaffected --
+   only the tap delay and the accidental scroll-capture go away.
+
+   This is set on interactive elements only, not globally, so scrolling
+   behaviour everywhere else is exactly as it was.
+*/
+button,
+[role='button'],
+a,
+input,
+select,
+textarea,
+label {
+  touch-action: manipulation;
+}
+
 /* Keyboard focus must always be clearly visible, on every screen. */
 :focus-visible {
   outline: 3px solid var(--color-coral);
