@@ -174,6 +174,13 @@ function CommunicationBoard({ childProfile }) {
 
   /* The scrolling card area, moved by the Up/Down buttons. */
   const cardAreaRef = useRef(null)
+
+  /*
+   * Identifies the most recent control label, so its cleanup timer only ever
+   * cancels its own utterance. Bumped by anything else that speaks. A ref,
+   * not state: changing it must never cause a re-render.
+   */
+  const controlSpeechToken = useRef(0)
   const [canScrollUp, setCanScrollUp] = useState(false)
   const [canScrollDown, setCanScrollDown] = useState(false)
 
@@ -331,15 +338,101 @@ function CommunicationBoard({ childProfile }) {
    * without pressing anything else -- for a child still matching a picture to
    * its word, that instant confirmation is most of the point of the card.
    *
-   * interrupt: false is deliberate. A sentence the child asked to hear is
-   * never cut off by a card tapped while it plays, and a fast run of taps
-   * speaks the first word rather than queueing a backlog that leaves the
-   * board narrating long after the child has moved on. The card is added
-   * either way: the sentence never depends on whether the sound played.
+   * EVERY CARD IS SPOKEN, but a sentence the child asked to hear is still
+   * never cut off.
+   *
+   * This used to pass interrupt: false unconditionally, which skips the word
+   * whenever the engine is busy. Measured, that meant a child tapping three
+   * cards in a row heard only two of them -- the second word silenced the
+   * third. Every tap still reached the sentence, so the bug was invisible on
+   * screen and audible only to the child, which is the worst way round.
+   *
+   * A card now INTERRUPTS a previous card word: the newest word is the one
+   * the child is waiting to hear, and the older one has already been heard.
+   * Rapid tapping stays sane because each word replaces the last rather than
+   * queueing a backlog.
+   *
+   * The one thing it must not interrupt is the Speak button reading the whole
+   * sentence back -- reaching for the next card while that plays is normal,
+   * and cutting it off would punish it. `isSpeaking` is already tracked for
+   * the "Speaking…" label, so it tells us exactly when to stand back.
    */
   function handleSelectCard(card) {
     setSentence((current) => [...current, card])
-    speakText(card.label, { voicePreference, interrupt: false })
+    /* Stands down a pending control-label cancel so it cannot clip this
+       word. See speakControlThen(). */
+    controlSpeechToken.current += 1
+    speakText(card.label, { voicePreference, interrupt: !isSpeaking })
+  }
+
+  /* ==========================================================================
+     SPOKEN FEEDBACK FOR THE CONTROLS
+
+     Says what a control DOES as it is pressed -- "Clear", "Core Words",
+     "Back", or a folder's own name. A child who cannot yet read the icons
+     hears which button they landed on, and the board answers every tap rather
+     than only the ones that add a word.
+
+     Called only from event handlers, never from render or an effect, so it
+     cannot fire again when React re-renders. One tap is one call.
+
+     interrupt: true is what prevents doubling in practice: a control's name
+     replaces whatever was mid-sentence instead of queueing behind it. That
+     also matches what the press means -- the child has moved on, so the older
+     utterance is no longer what they are waiting to hear.
+
+     Deliberately NOT routed through the card path: this bypasses the burst
+     throttle that protects rapid card tapping, because a control press is a
+     single deliberate act that must always be acknowledged.
+
+     Speech is fire-and-forget. Every caller performs its real action straight
+     afterwards, so a browser with no speech engine, a muted device, or a
+     failed utterance changes nothing about how the board behaves.
+     ========================================================================== */
+  function speakControl(label) {
+    speakText(label, { voicePreference, interrupt: true })
+  }
+
+  /*
+   * Speaks a control's name and then runs the action it names.
+   *
+   * WHY THE ACTION IS DELAYED BY A FRAME AND THE LABEL IS CUT SHORT
+   * ---------------------------------------------------------------
+   * Card taps use interrupt: false, which skips the word whenever the engine
+   * is already speaking. Measured here, a control label leaves the engine
+   * reporting `speaking: true` for roughly TWO SECONDS -- far longer than the
+   * ~900ms burst throttle -- so without this, a child who opened "Actions"
+   * and tapped a word inside it heard the folder name and then silence. That
+   * was a real regression introduced by adding spoken controls, and it hurt
+   * exactly the moment that matters most: the first word in a new folder.
+   *
+   * So a control label is deliberately BRIEF: it is cancelled shortly after
+   * it starts, which is long enough to hear a one- or two-word name and short
+   * enough that the engine is idle again before a child can find and tap a
+   * card. The label is still fully audible; only the trailing silence the
+   * engine holds on to is trimmed.
+   *
+   * The action itself is never delayed by the speech and never depends on it.
+   */
+  function speakControlThen(label, action) {
+    speakControl(label)
+
+    /*
+     * The label is now left to finish on its own.
+     *
+     * This used to cancel the utterance after a fixed delay, to stop a busy
+     * engine from suppressing the next card word. That is no longer needed:
+     * card taps interrupt whatever is playing, so they are never skipped by a
+     * label that is still speaking. Keeping the timer would only risk cutting
+     * a label short -- more likely now the rate is a slower 0.85, where a
+     * two-word label such as "Core Words" takes noticeably longer to say.
+     *
+     * The token is still bumped so any timer left over from an older call
+     * stands down rather than cancelling this label.
+     */
+    controlSpeechToken.current += 1
+
+    if (action) action()
   }
 
   /* Typed words become the same shape as a card, so everything downstream
@@ -358,6 +451,10 @@ function CommunicationBoard({ childProfile }) {
 
     /* interrupt: true -- pressing Speak means "say this now", so anything
        still playing (including a word from the card just tapped) stops. */
+    /* Same stand-down as a card tap: a sentence the child asked to hear must
+       never be cut short by a control label's cleanup timer. */
+    controlSpeechToken.current += 1
+
     const started = speakText(text, { voicePreference, interrupt: true })
 
     if (!started) {
@@ -379,10 +476,12 @@ function CommunicationBoard({ childProfile }) {
   }
 
   function handleDelete() {
+    speakControl('Delete')
     setSentence((current) => current.slice(0, -1))
   }
 
   function handleClear() {
+    speakControl('Clear')
     setSentence([])
   }
 
@@ -391,6 +490,8 @@ function CommunicationBoard({ childProfile }) {
    * open folder. One button, one predictable step at a time.
    */
   function handleBack() {
+    speakControlThen('Back')
+
     if (isKeyboardOpen) {
       setIsKeyboardOpen(false)
       return
@@ -626,7 +727,15 @@ function CommunicationBoard({ childProfile }) {
               '--tint': categoryColors(category.id)?.tint,
               '--deep': categoryColors(category.id)?.deep,
             }}
-            onClick={() => openFolder(category.id)}
+            onClick={() => {
+              /*
+               * The folder's own displayed name -- the same string shown on
+               * the tile below, so what the child hears is exactly what they
+               * see. "Actions" says "Actions"; a renamed folder says its new
+               * name with no list to keep in step.
+               */
+              speakControlThen(category.label, () => openFolder(category.id))
+            }}
             aria-label={`Open ${category.label} folder`}
           >
             {/*
@@ -755,11 +864,41 @@ function CommunicationBoard({ childProfile }) {
            * never appeared: the data was always there and nothing ever asked
            * for it.
            */
-          onCoreWords={() => openFolder(CORE_WORDS_KEY)}
-          onKeyboard={() => setIsKeyboardOpen((open) => !open)}
+          onCoreWords={() => speakControlThen('Core Words', () => openFolder(CORE_WORDS_KEY))}
+          /*
+           * Only the OPENING is announced. Toggling the keyboard shut is a
+           * "go back" action and already lands somewhere the child can see,
+           * so saying "Keyboard" while it closes would describe the thing
+           * that just disappeared.
+           */
+          onKeyboard={() => {
+            /*
+             * Read the flag here rather than inside the updater. A state
+             * updater must be a PURE function: React is free to call it more
+             * than once for a single update (StrictMode does exactly that in
+             * development), which would speak the label twice for one tap.
+             * Deciding out here keeps it one tap, one utterance.
+             */
+            if (!isKeyboardOpen) speakControlThen('Keyboard')
+            setIsKeyboardOpen((open) => !open)
+          }}
           isKeyboardOpen={isKeyboardOpen}
-          onScrollUp={() => scrollCards(-1)}
-          onScrollDown={() => scrollCards(1)}
+          /*
+           * "Up" / "Down" are spoken only when the move can actually happen.
+           *
+           * The buttons carry the HTML `disabled` attribute when there is
+           * nowhere to go, so a press does not reach here at all -- but the
+           * guard is explicit as well, because announcing a movement that did
+           * not occur would tell the child something untrue about the board.
+           */
+          onScrollUp={() => {
+            if (!canScrollUp) return
+            speakControlThen('Up', () => scrollCards(-1))
+          }}
+          onScrollDown={() => {
+            if (!canScrollDown) return
+            speakControlThen('Down', () => scrollCards(1))
+          }}
           canScrollUp={canScrollUp}
           canScrollDown={canScrollDown}
           /*
@@ -771,7 +910,13 @@ function CommunicationBoard({ childProfile }) {
            */
           onAlert={() => {
             playAlert()
-            openFolder(EMERGENCY_KEY)
+            /*
+             * The tone AND the word. The tone calls an adult over, which is
+             * the button's original purpose; the spoken label tells the child
+             * which button they pressed. They do not collide -- the tone is
+             * Web Audio, the label is speech synthesis, so both are heard.
+             */
+            speakControlThen('Alert', () => openFolder(EMERGENCY_KEY))
           }}
         />
       </div>
