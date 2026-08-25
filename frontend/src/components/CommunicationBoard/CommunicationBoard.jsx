@@ -15,6 +15,8 @@ import {
   loadTheme,
   saveTheme,
   applyTheme,
+  loadVoice,
+  saveVoice,
 } from './boardSettings'
 import { fetchBoard } from './boardApi'
 /*
@@ -151,6 +153,15 @@ function CommunicationBoard({ childProfile }) {
   /* Light or dark. Applied to <html>, so it covers every screen. */
   const [themeId, setThemeId] = useState(loadTheme)
 
+  /*
+   * The Voice setting, or null when this device has never chosen one.
+   *
+   * null is meaningful: it means "no device preference", so the voice saved
+   * on the child profile is used instead. Only once someone picks a voice
+   * here does this device start overriding the profile.
+   */
+  const [voiceId, setVoiceId] = useState(loadVoice)
+
   useEffect(() => {
     applyTheme(themeId)
   }, [themeId])
@@ -208,7 +219,19 @@ function CommunicationBoard({ childProfile }) {
    * that setting, and two places to set one value would only disagree.
    */
   const gridSize = Number(childProfile?.gridSize) || FALLBACK_GRID_SIZE
-  const voicePreference = childProfile?.voice || 'female'
+  /*
+   * Which voice speaks: the Settings choice wins, then the child profile,
+   * then female as the last resort.
+   *
+   * The Settings value is per DEVICE and the profile value is per CHILD, and
+   * the device has to win -- it is the only one that can know which voices
+   * are actually installed here. A profile asking for male on a tablet with
+   * no male voice should still let the caregiver pick something audible.
+   *
+   * Everything downstream is unchanged: this is still just the string
+   * 'male' or 'female' handed to speakText(), exactly as before.
+   */
+  const voicePreference = voiceId || childProfile?.voice || 'female'
 
   /*
    * The saved grid size chooses the card SIZE, not a fixed column count.
@@ -778,6 +801,16 @@ function CommunicationBoard({ childProfile }) {
           onSelectTheme={(id) => {
             setThemeId(id)
             saveTheme(id)
+          }}
+          /*
+           * Shows the profile's voice until this device chooses its own, so
+           * the panel never displays a selection that is not what is actually
+           * being spoken.
+           */
+          voice={voicePreference}
+          onSelectVoice={(id) => {
+            setVoiceId(id)
+            saveVoice(id)
           }}
           /* Settings closes as Edit Words opens, so only one panel is ever
              on screen. */

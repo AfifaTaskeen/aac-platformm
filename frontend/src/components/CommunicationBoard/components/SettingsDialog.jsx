@@ -6,6 +6,8 @@ import {
   getTextSize,
   THEMES,
   getTheme,
+  VOICES,
+  getVoice,
 } from '../boardSettings'
 
 /*
@@ -48,6 +50,8 @@ function SettingsDialog({
   onSelectTextSize,
   theme,
   onSelectTheme,
+  voice,
+  onSelectVoice,
   onEditWords,
   onClose,
 }) {
@@ -140,6 +144,19 @@ function SettingsDialog({
       selected: textSize,
       current: getTextSize(textSize),
       onSelect: onSelectTextSize,
+    },
+    /*
+     * Voice sits next to the other "how the board behaves" settings and uses
+     * the same row/option markup, so it inherits the panel's existing
+     * responsive layout rather than needing rules of its own.
+     */
+    {
+      id: 'voice',
+      title: 'Voice',
+      options: VOICES,
+      selected: voice,
+      current: getVoice(voice),
+      onSelect: onSelectVoice,
     },
     {
       id: 'theme',

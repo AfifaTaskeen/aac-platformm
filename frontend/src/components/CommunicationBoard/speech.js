@@ -90,7 +90,28 @@ export function pickVoice(preference) {
    */
   if (!english.length) return null
 
-  return english.find((v) => looksLike(v, hints)) || english[0]
+  /*
+   * en-US FIRST, then any other English.
+   *
+   * The board's utterances are en-US, and a voice whose own tag matches is
+   * the closest fit. But an en-GB or en-IN voice of the RIGHT GENDER is a
+   * better answer than an en-US voice of the wrong one: the child asked for
+   * a male or female voice, and accent is the smaller compromise. So gender
+   * is the outer preference and locale the tie-break inside it.
+   *
+   * Both lists are searched before giving up on the request, and only then
+   * does it fall back to any English voice at all -- so a device with no
+   * male voice still speaks, in a female one, rather than falling silent.
+   */
+  const enUS = english.filter((v) => (v.lang || '').toLowerCase().replace('_', '-').startsWith('en-us'))
+  const enOther = english.filter((v) => !enUS.includes(v))
+
+  return (
+    enUS.find((v) => looksLike(v, hints)) ||
+    enOther.find((v) => looksLike(v, hints)) ||
+    enUS[0] ||
+    english[0]
+  )
 }
 
 /*

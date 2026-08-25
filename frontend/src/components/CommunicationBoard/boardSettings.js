@@ -196,3 +196,69 @@ export function applyTheme(id) {
   const theme = getTheme(id)
   document.documentElement.setAttribute('data-theme', theme.id)
 }
+
+/* -------------------------------------------------------------------------
+   VOICE
+
+   Which voice reads the sentence aloud. Same shape as the settings above so
+   the panel renders it with no special case.
+
+   This is a PREFERENCE, not a guarantee. The voices belong to the device and
+   its browser, not to this app: speechSynthesis.getVoices() returns whatever
+   that phone, tablet or laptop happens to have installed. Some Android
+   devices expose a single English voice, in which case both options resolve
+   to the same one -- pickVoice() in speech.js degrades to a working English
+   voice rather than to silence, because a child who cannot be heard is worse
+   off than a child heard in the other gender.
+
+   The child profile already carries a `voice` field, chosen once during
+   profile setup. This setting overrides it per device, which is what makes it
+   useful: the profile value cannot know which voices this particular device
+   actually has.
+   ------------------------------------------------------------------------- */
+export const VOICES = [
+  {
+    id: 'female',
+    label: 'Female',
+    description: 'A female speaking voice',
+  },
+  {
+    id: 'male',
+    label: 'Male',
+    description: 'A male speaking voice',
+  },
+]
+
+export const DEFAULT_VOICE = 'female'
+
+const VOICE_STORAGE_KEY = 'buddytalk.voice'
+
+export function getVoice(id) {
+  return VOICES.find((v) => v.id === id) || VOICES.find((v) => v.id === DEFAULT_VOICE)
+}
+
+/*
+ * The saved choice, or null when the child has never set one.
+ *
+ * null is deliberately different from the default here: it means "no device
+ * preference", which lets the board fall back to the voice saved on the child
+ * profile. Returning DEFAULT_VOICE instead would silently override a profile
+ * set to male with female on every device.
+ */
+export function loadVoice() {
+  try {
+    const saved = window.localStorage.getItem(VOICE_STORAGE_KEY)
+    if (saved && VOICES.some((v) => v.id === saved)) return saved
+  } catch {
+    // Storage unavailable -- fall through.
+  }
+  return null
+}
+
+export function saveVoice(id) {
+  try {
+    window.localStorage.setItem(VOICE_STORAGE_KEY, id)
+  } catch {
+    // Saving failed; the choice still applies for this session.
+  }
+}
