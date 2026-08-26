@@ -225,6 +225,10 @@ const WORD_OVERRIDES = {
     /* The supplied file is spelled "emmergency.jpeg". The FILE is not
        renamed -- only the card's word is corrected. */
     emmergency: "Emergency",
+    /* Likewise "suprised.jpg" is missing its first R. Renaming the file
+       would break the imageUrl already stored on every existing card, so
+       only the WORD is corrected -- the child sees and hears "Surprised". */
+    suprised: "Surprised",
     bro: "Brother",
     dad: "Dad",
     mom: "Mom",

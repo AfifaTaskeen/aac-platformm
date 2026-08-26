@@ -344,3 +344,120 @@ export function saveCardPosition(id) {
     // Saving failed; the choice still applies for this session.
   }
 }
+
+/* -------------------------------------------------------------------------
+   ANIMATION
+
+   Whether tapping a card plays the "come forward" animation -- the card
+   appearing to lift out of the grid, grow, travel toward the middle of the
+   board, hold, and settle back. See cardPressAnimation.js for what actually
+   happens; this setting only decides WHETHER it happens.
+
+   It is a display preference and nothing more. Turning it off changes no
+   behaviour: the word still reaches the sentence bar on the same line of
+   code, at the same moment, and is still spoken. The animation has always
+   been feedback about something that has ALREADY happened, so removing it
+   cannot remove the thing it was reporting.
+
+   ON is the default because the movement is what tells a child WHICH card
+   answered their tap -- valuable when a grid holds thirty near-identical
+   tiles. But it is genuinely optional: motion is distracting or nauseating
+   for some children, and for a child with a visual processing difficulty a
+   card that leaves its place can be harder to track, not easier. Some
+   caregivers also simply want the board to feel instant.
+
+   Kept as an option list rather than a boolean so the settings panel renders
+   it with the same row/chooser markup as every other setting, with no new UI
+   code -- the same reason Text Size and Voice needed none.
+   ------------------------------------------------------------------------- */
+export const ANIMATIONS = [
+  {
+    id: 'on',
+    label: 'On',
+    description: 'Cards zoom when tapped',
+  },
+  {
+    id: 'off',
+    label: 'Off',
+    description: 'Cards respond instantly',
+  },
+]
+
+export const DEFAULT_ANIMATION = 'on'
+
+const ANIMATION_STORAGE_KEY = 'buddytalk.animation'
+
+export function getAnimation(id) {
+  return (
+    ANIMATIONS.find((a) => a.id === id) || ANIMATIONS.find((a) => a.id === DEFAULT_ANIMATION)
+  )
+}
+
+export function loadAnimation() {
+  try {
+    const saved = window.localStorage.getItem(ANIMATION_STORAGE_KEY)
+    if (saved && ANIMATIONS.some((a) => a.id === saved)) return saved
+  } catch {
+    // Storage unavailable -- fall through to the default.
+  }
+  return DEFAULT_ANIMATION
+}
+
+export function saveAnimation(id) {
+  try {
+    window.localStorage.setItem(ANIMATION_STORAGE_KEY, id)
+  } catch {
+    // Saving failed; the choice still applies for this session.
+  }
+}
+
+/*
+ * Whether anyone has ever chosen this setting on this device.
+ *
+ * loadAnimation() cannot answer this -- it returns 'on' both for "the user
+ * chose On" and for "nobody has touched it", which are different situations
+ * once the operating system's reduced-motion preference is involved. This
+ * distinguishes them without changing loadAnimation()'s contract.
+ */
+export function hasAnimationChoice() {
+  try {
+    const saved = window.localStorage.getItem(ANIMATION_STORAGE_KEY)
+    return Boolean(saved) && ANIMATIONS.some((a) => a.id === saved)
+  } catch {
+    return false
+  }
+}
+
+/*
+ * Whether the animation should ACTUALLY play right now.
+ *
+ * Two things have to agree: the app setting, and the operating system's
+ * reduced-motion preference. A child or caregiver who has told their device
+ * they do not want motion -- often because it triggers nausea, dizziness or
+ * a vestibular disorder -- has made a health decision, and an app setting
+ * left at its default should not override it.
+ *
+ * So the OS wins when it asks for less motion. Deliberately NOT a hard veto:
+ * if someone explicitly turns Animation on in this app while reduced motion
+ * is set at the OS level, that is a clear, specific instruction about this
+ * one app and it is honoured. What reduced motion overrides is the DEFAULT,
+ * which is the setting nobody chose.
+ *
+ * Read at tap time rather than stored, so changing the OS preference takes
+ * effect on the very next tap with no refresh.
+ */
+export function prefersReducedMotion() {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    /* matchMedia missing (very old browsers, some test environments) means
+       no stated preference, which is not the same as asking for motion. */
+    return false
+  }
+}
+
+export function shouldAnimateCards(animationId, hasExplicitChoice) {
+  if (animationId === 'off') return false
+  if (prefersReducedMotion() && !hasExplicitChoice) return false
+  return true
+}

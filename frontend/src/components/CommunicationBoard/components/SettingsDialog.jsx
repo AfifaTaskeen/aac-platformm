@@ -10,6 +10,8 @@ import {
   getVoice,
   CARD_POSITIONS,
   getCardPosition,
+  ANIMATIONS,
+  getAnimation,
 } from '../boardSettings'
 
 /*
@@ -56,6 +58,8 @@ function SettingsDialog({
   onSelectVoice,
   cardPosition,
   onSelectCardPosition,
+  animation,
+  onSelectAnimation,
   onEditWords,
   onLogOut,
   onClose,
@@ -183,6 +187,19 @@ function SettingsDialog({
       selected: theme,
       current: getTheme(theme),
       onSelect: onSelectTheme,
+    },
+    /*
+     * Animation -- whether a tapped card visibly comes forward. Grouped with
+     * the other display settings because that is all it changes: what the
+     * board LOOKS like when a card is chosen, never what choosing one does.
+     */
+    {
+      id: 'animation',
+      title: 'Animation',
+      options: ANIMATIONS,
+      selected: animation,
+      current: getAnimation(animation),
+      onSelect: onSelectAnimation,
     },
   ]
 

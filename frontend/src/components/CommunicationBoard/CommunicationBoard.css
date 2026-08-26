@@ -24,13 +24,35 @@
    reaches all the way to the right edge.
 */
 .cboard {
+  /*
+     100dvh, not 100vh: on a phone the browser's URL bar shrinks the visible
+     area, and 100vh keeps reporting the TALLER figure -- so the bottom of the
+     board would sit behind the browser chrome. dvh tracks the area actually
+     on screen, and the board re-lays out as the bar hides and returns.
+  */
   height: 100dvh;
   width: 100%;
   display: flex;
   flex-direction: column;
   background: var(--color-cream);
   overflow: hidden;
-  padding: clamp(6px, 1vh, 10px);
+
+  /*
+     SAFE AREA.
+
+     A notch, a rounded corner or a home indicator overlaps the viewport, and
+     in LANDSCAPE the cut-out is at the side -- exactly where the toolbar rail
+     lives. The insets are added to the board's own padding, so on a phone
+     that has them the rail and the back arrow move clear of the obstruction,
+     and on every other device they resolve to 0 and nothing changes.
+
+     max() rather than a bare addition, so the board keeps its normal padding
+     when an inset is smaller than it.
+  */
+  padding-block: max(clamp(6px, 1vh, 10px), env(safe-area-inset-top))
+    max(clamp(6px, 1vh, 10px), env(safe-area-inset-bottom));
+  padding-inline: max(clamp(6px, 1vh, 10px), env(safe-area-inset-left))
+    max(clamp(6px, 1vh, 10px), env(safe-area-inset-right));
   gap: clamp(6px, 0.9vh, 10px);
 
   /*
@@ -1556,17 +1578,31 @@
        most for a child aiming at it.
     */
     /*
-       36px is the measured figure, not a guess: six buttons plus five gaps
-       plus the rail's own padding must fit a ~230px column at 844x318, which
-       leaves ~36px each. Anything larger pushed Settings past the bottom
-       edge -- the exact bug this rail had to solve.
+       HEIGHT FOLLOWS THE VIEWPORT, rather than a fixed floor.
 
-       Below the 44px guideline in this one axis only. The buttons stay
-       84-116px WIDE, so the target a child actually aims at is far larger
-       than a fingertip, and the rail still scrolls if a phone is shorter
-       still, so no control is ever unreachable.
+       Six buttons plus their gaps must fit the rail's column, and how much
+       column exists depends entirely on the phone. Measured:
+
+         844x390 (no browser bar)  -> 299px available, 269px needed for 44px
+                                      each -- 30px to SPARE
+         844x318 (URL bar showing) -> 230px available -- genuinely 39px short
+
+       A flat 36px sized every phone for the worst case, so the taller one
+       threw away 30px of usable height and left every target below the
+       guideline for no reason.
+
+       clamp() lets each phone take what it actually has. 11.5vh is the
+       measured share: the rail column is ~77% of the viewport, and six
+       buttons plus gaps divide it -- 36.5px at 318px tall, 48px at 390px.
+       So 44px is reached at about 383px of viewport height (a phone showing
+       no browser bar) and grows to 52px, while collapsing back to the 36px
+       floor on the shortest screens -- where the rail still scrolls, so no
+       control is ever unreachable.
+
+       The buttons stay 84-116px WIDE throughout, so even at the floor the
+       target is far larger than a fingertip in the axis that is not scarce.
     */
-    min-height: 36px;
+    min-height: clamp(36px, 11.5vh, 52px);
     padding-block: 1px;
     padding-inline: 2px;
   }
@@ -1576,7 +1612,7 @@
      the bottom. It stays prominent through its fill and its position at the
      top of the stack. */
   .cmenu__btn--keyboard {
-    min-height: 36px;
+    min-height: clamp(36px, 11.5vh, 52px);
   }
 
   /* Icon and label both shrink to fit the shorter button, and the label wraps
@@ -1840,6 +1876,10 @@
   font-size: clamp(1.15rem, 2.7vh, 1.7rem);
 }
 
+/* The same figure as a variable, so the landscape rule can cap it against
+   the column width without having to restate each size. */
+.cboard--text-small { --label-size: clamp(1.15rem, 2.7vh, 1.7rem); }
+
 .cboard--text-medium .ccard__label,
 .cboard--text-medium .ccard--core .ccard__label,
 .cboard--text-medium .ccard--noimage .ccard__label,
@@ -1847,12 +1887,16 @@
   font-size: clamp(1.4rem, 3.3vh, 2.15rem);
 }
 
+.cboard--text-medium { --label-size: clamp(1.4rem, 3.3vh, 2.15rem); }
+
 .cboard--text-large .ccard__label,
 .cboard--text-large .ccard--core .ccard__label,
 .cboard--text-large .ccard--noimage .ccard__label,
 .cboard--text-large .cfolder .ccard__label {
   font-size: clamp(1.65rem, 3.9vh, 2.6rem);
 }
+
+.cboard--text-large { --label-size: clamp(1.65rem, 3.9vh, 2.6rem); }
 
 /*
    LONG WORDS at a large setting.
@@ -2727,6 +2771,63 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+
+    /*
+       THE TEXT ALSO HAS TO FIT THE COLUMN, not just the height.
+
+       The Text Size rules size labels from viewport HEIGHT alone (3.3vh and
+       friends). In landscape that is the wrong axis: height is scarce while
+       width is shared between five columns, so a 22.4px label was being
+       asked to fit a 117px card. Measured, exactly three folder names
+       overflowed -- "Body & Health" (129px), "Food & Drink" (123px) and
+       "Things & Objects" (143px) -- and were ellipsised.
+
+       A width term fixes the cause rather than hiding it. Working back from
+       the worst case: "Things & Objects" needed 143px at 22.4px inside a
+       117px card. Measured again after each step, 1.94vw is the figure that
+       finally clears it at both 844px and 915px wide, with every shorter
+       label comfortably inside its card. --actual-colw is deliberately NOT used: it contains a
+       100% term that re-resolves against whatever element reads it, so a
+       child element inherits a wrong value rather than the column width.
+
+       min() takes whichever is smaller, so this only ever LOWERS a label that
+       would not fit and never shrinks a comfortable one -- wider cards keep
+       exactly the size the Text Size setting asks for. The 0.95rem floor
+       keeps it readable at the smallest.
+    */
+    /*
+       Matched to the specificity of the Text Size rules
+       (.cboard--text-medium .ccard__label = 0,2,0). A bare .ccard__label
+       here would lose to them and never apply, which is exactly what
+       happened first time round.
+    */
+  }
+
+  .cboard--text-small .ccard__label,
+  .cboard--text-medium .ccard__label,
+  .cboard--text-large .ccard__label,
+  .cboard--text-small .cfolder .ccard__label,
+  .cboard--text-medium .cfolder .ccard__label,
+  .cboard--text-large .cfolder .ccard__label {
+    font-size: min(var(--label-size, 1.4rem), max(0.95rem, 2.05vw));
+
+    /*
+       AND, FOR THE ONE NAME THAT STILL WILL NOT FIT: tighten the tracking
+       rather than shrink every label further.
+
+       Text width does not scale purely with font-size -- letter- and
+       word-spacing do not shrink with it -- so chasing the last few pixels
+       with font-size alone kept "Things & Objects" 3px over its 117px card
+       while making every other label needlessly small.
+
+       Tracking is the right lever for the last few pixels: it costs nothing
+       for labels that already fit, and is imperceptible at reading size.
+    */
+    /* -0.045em over ~16 characters recovers the last ~8px, which clears
+       "Things & Objects" -- the single longest name on the board -- with a
+       little margin. Still well below the point where tracking reads as
+       condensed, and every shorter label is visually unchanged. */
+    letter-spacing: -0.045em;
   }
 
   /*
@@ -2822,11 +2923,11 @@
   }
 
   .cmenu__btn {
-    min-height: 36px;
+    min-height: clamp(36px, 11.5vh, 52px);
   }
 
   .cmenu__btn--keyboard {
-    min-height: 36px;
+    min-height: clamp(36px, 11.5vh, 52px);
   }
 }
 

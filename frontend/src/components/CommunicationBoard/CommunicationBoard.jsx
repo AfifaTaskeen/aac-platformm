@@ -19,6 +19,10 @@ import {
   saveVoice,
   loadCardPosition,
   saveCardPosition,
+  loadAnimation,
+  saveAnimation,
+  hasAnimationChoice,
+  prefersReducedMotion,
 } from './boardSettings'
 import { fetchBoard } from './boardApi'
 /*
@@ -169,6 +173,65 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * full-width layout, so an untouched install looks exactly as it did.
    */
   const [cardPositionId, setCardPositionId] = useState(loadCardPosition)
+
+  /*
+   * Whether tapping a card plays the "come forward" animation. On by default;
+   * see cardPressAnimation.js for what it actually does.
+   *
+   * This is DECORATION ONLY. Nothing about selecting, speaking or storing a
+   * word depends on it -- the word is added before the animation is even
+   * considered -- so turning it off changes how the board looks and nothing
+   * about what it does.
+   */
+  const [animationId, setAnimationId] = useState(loadAnimation)
+
+  /*
+   * Whether anyone has ever chosen the Animation setting on this device.
+   *
+   * Needed because 'on' means two different things: "the caregiver chose On"
+   * and "nobody has touched this". Only the second should defer to the
+   * device's reduced-motion preference -- an explicit choice is a specific
+   * instruction about this app and is honoured.
+   */
+  const [animationChosen, setAnimationChosen] = useState(hasAnimationChoice)
+
+  /*
+   * The device's reduced-motion preference, kept live.
+   *
+   * Held in state rather than read at tap time so that toggling it in the
+   * operating system updates the board immediately, without a refresh --
+   * someone who turns reduced motion on because motion is making them unwell
+   * should not have to reload to be believed.
+   */
+  const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion)
+
+  useEffect(() => {
+    let query
+    try {
+      query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    } catch {
+      /* No matchMedia: no preference to track, and the initial value already
+         defaulted to "no preference stated". */
+      return
+    }
+    const onChange = (event) => setReducedMotion(event.matches)
+    /* addEventListener is the modern form; addListener is kept for older
+       Safari, where the modern one is missing on MediaQueryList. */
+    if (query.addEventListener) query.addEventListener('change', onChange)
+    else query.addListener(onChange)
+    return () => {
+      if (query.removeEventListener) query.removeEventListener('change', onChange)
+      else query.removeListener(onChange)
+    }
+  }, [])
+
+  /*
+   * The resolved answer the cards actually use: the setting AND the device
+   * preference together. Recomputed on render, so both a Settings change and
+   * an operating-system change take effect on the very next tap.
+   */
+  const animateCards =
+    animationId === 'on' && (animationChosen || !reducedMotion)
 
   useEffect(() => {
     applyTheme(themeId)
@@ -806,6 +869,7 @@ function CommunicationBoard({ childProfile, onLogOut }) {
               key={card.id}
               card={card}
               onSelect={handleSelectCard}
+              animate={animateCards}
             />
           ))}
         </div>
@@ -830,6 +894,7 @@ function CommunicationBoard({ childProfile, onLogOut }) {
             card={card}
             onSelect={handleSelectCard}
             isCore
+            animate={animateCards}
           />
         ))}
 
@@ -961,6 +1026,17 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           <div
             className={[
               'cboard__cards',
+              /*
+               * These carry the grid size to cardPressAnimation.js, which
+               * scales the travel distance to how tightly packed the cards
+               * are. Very Small was missing here, so it silently animated
+               * with Medium's strength -- a card sweeping across the most
+               * crowded layout there is.
+               *
+               * They are animation inputs only: no stylesheet rule keys off
+               * them, and the column count comes from the grid style.
+               */
+              gridSizeId === 'verysmall' ? 'cboard__cards--verysmall' : '',
               gridSizeId === 'small' ? 'cboard__cards--small' : '',
               gridSizeId === 'large' ? 'cboard__cards--large' : '',
             ]
@@ -1088,6 +1164,18 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           onSelectCardPosition={(id) => {
             setCardPositionId(id)
             saveCardPosition(id)
+          }}
+          animation={animationId}
+          /*
+           * Choosing either value counts as an explicit choice, which is what
+           * lets an On chosen here override a device-level reduced-motion
+           * default. Recorded on selection rather than re-read from storage,
+           * so it is true from this moment without a refresh.
+           */
+          onSelectAnimation={(id) => {
+            setAnimationId(id)
+            saveAnimation(id)
+            setAnimationChosen(true)
           }}
           /* Settings closes as Edit Words opens, so only one panel is ever
              on screen. */

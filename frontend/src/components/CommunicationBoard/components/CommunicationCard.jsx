@@ -26,12 +26,21 @@ import { playCardPress } from '../cardPressAnimation'
  * there is nothing to reflow, and it is not inside the scroll container, so
  * there is nothing to clip it and no reason to touch overflow.
  *
+ * The animation can be switched off in Settings, and is also stood down when
+ * the device asks for reduced motion. Because it is decoration layered on top
+ * of an action that has already happened, switching it off removes the
+ * movement and nothing else.
+ *
  * Props:
  *   card      - an entry from the board data
  *   onSelect  - called IMMEDIATELY on tap, before any animation
  *   isCore    - render in the core-word style
+ *   animate   - whether the press animation plays. The board resolves this
+ *               from the Animation setting and the operating system's
+ *               reduced-motion preference; this component only passes it on.
+ *               It affects DECORATION ONLY -- onSelect fires either way.
  */
-function CommunicationCard({ card, onSelect, isCore = false }) {
+function CommunicationCard({ card, onSelect, isCore = false, animate = true }) {
   /* If a picture is missing or fails to load, fall back to a word-only card
      rather than showing a broken-image icon to a child. */
   const [imageFailed, setImageFailed] = useState(false)
@@ -68,8 +77,13 @@ function CommunicationCard({ card, onSelect, isCore = false }) {
      */
     onSelect(card)
 
-    /* Then the visual feedback, entirely separately. */
-    cancelRef.current = playCardPress(buttonRef.current)
+    /*
+     * Then the visual feedback, entirely separately -- and only if it is
+     * wanted. Note this is BELOW onSelect, which is the whole reason turning
+     * the animation off is safe: the word has already been added by the time
+     * this line decides whether to draw anything.
+     */
+    cancelRef.current = playCardPress(buttonRef.current, animate)
   }
 
   const showImage = Boolean(card.image) && !imageFailed
