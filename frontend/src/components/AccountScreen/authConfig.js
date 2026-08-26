@@ -58,6 +58,29 @@ function inferApiBase() {
     /^172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)
 
   if (isPrivateLan) return `http://${host}:${BACKEND_PORT}`
+
+  /*
+   * PRODUCTION SAFETY NET.
+   *
+   * Falling back to localhost is correct for development and wrong -- and
+   * silently wrong -- for a deployed site: every visitor's browser would try
+   * to reach an API on THEIR OWN machine, so the whole app fails with network
+   * errors that look like the server being down.
+   *
+   * A production build with no VITE_API_URL is a misconfiguration, so it is
+   * reported loudly at startup instead of shipping a site that cannot work.
+   * Same origin is used as the fallback, which is correct whenever the API is
+   * served behind the same domain (a reverse proxy or a single host) and is a
+   * far better guess than localhost in every other case.
+   */
+  if (import.meta.env.PROD) {
+    console.error(
+      'VITE_API_URL is not set. Falling back to this page own origin. ' +
+        'Set VITE_API_URL at build time to the public API URL.',
+    )
+    return window.location.origin
+  }
+
   return `http://localhost:${BACKEND_PORT}`
 }
 

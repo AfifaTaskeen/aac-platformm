@@ -1688,6 +1688,13 @@ app.get("/api/child-profile", requireAuth, async (req, res) => {
                 gender: profile.gender,
                 voice: profile.voice,
                 gridSize: profile.gridSize,
+                /* Absent on profiles created before this setting existed, so
+                   it is normalised to a real boolean rather than undefined. */
+                cardFlexibility: profile.cardFlexibility === true,
+                /* The mixed home layout, or null when never customised. */
+                homeOrder: Array.isArray(profile.homeOrder)
+                    ? profile.homeOrder.map((entry) => ({ type: entry.type, id: entry.id }))
+                    : null,
                 createdAt: profile.createdAt,
                 updatedAt: profile.updatedAt
             }
@@ -1764,6 +1771,13 @@ app.post("/api/child-profile", requireAuth, async (req, res) => {
                 gender: profile.gender,
                 voice: profile.voice,
                 gridSize: profile.gridSize,
+                /* Absent on profiles created before this setting existed, so
+                   it is normalised to a real boolean rather than undefined. */
+                cardFlexibility: profile.cardFlexibility === true,
+                /* The mixed home layout, or null when never customised. */
+                homeOrder: Array.isArray(profile.homeOrder)
+                    ? profile.homeOrder.map((entry) => ({ type: entry.type, id: entry.id }))
+                    : null,
                 createdAt: profile.createdAt,
                 updatedAt: profile.updatedAt
             }
@@ -2049,6 +2063,229 @@ function prettyImageName(fileName) {
     return base.charAt(0).toUpperCase() + base.slice(1);
 }
 
+/*
+ * PATCH /api/child-profile/settings -- board settings for THIS child.
+ *
+ * Separate from POST /api/child-profile deliberately. That route owns the
+ * child's IDENTITY -- name, gender, voice, grid size -- and validates all of
+ * it as a set, so a caregiver toggling one switch would have to resend the
+ * whole profile and could not change a setting without also re-asserting the
+ * child's name. These are preferences, they change one at a time, and they
+ * belong to the child rather than to the device.
+ *
+ * Card Flexibility lives here because the requirement is that it follow the
+ * CHILD: a caregiver who enables reordering for Lola on a tablet should find
+ * it enabled for Lola on a phone, and must never find it enabled for Neo.
+ * localStorage cannot express that -- it is per-device and per-browser.
+ *
+ * Only known keys are written, so a client cannot smuggle arbitrary fields
+ * into the profile document, and userId comes from the session as everywhere
+ * else.
+ */
+app.patch("/api/child-profile/settings", requireAuth, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const updates = {};
+
+        /* An allow-list, not a merge: anything not named here is ignored. */
+        if (body.cardFlexibility !== undefined) {
+            if (typeof body.cardFlexibility !== "boolean") {
+                return res.status(400).json({
+                    success: false,
+                    message: "Card Flexibility must be on or off."
+                });
+            }
+            updates.cardFlexibility = body.cardFlexibility;
+        }
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "No settings were provided."
+            });
+        }
+
+        updates.updatedAt = new Date();
+
+        const result = await childProfiles.findOneAndUpdate(
+            /* Matched on the SESSION's user id, never anything from the body --
+               the same rule the rest of this file follows. */
+            { userId: req.user._id },
+            { $set: updates },
+            { returnDocument: "after" }
+        );
+
+        /*
+         * No profile means there is nothing to attach a setting to. Reported
+         * as 404 with the same code the board uses, so the frontend can send
+         * the caregiver to profile setup rather than showing a dead end.
+         */
+        if (!result) {
+            return res.status(404).json({
+                success: false,
+                code: "NO_CHILD_PROFILE",
+                message: "Please create a child profile first."
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            settings: { cardFlexibility: result.cardFlexibility === true }
+        });
+
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "saving settings");
+        }
+        console.log("Saving child settings failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not save the setting. Please try again."
+        });
+    }
+});
+
+/*
+ * PUT /api/child-profile/home-order -- the HOME SCREEN's mixed layout.
+ *
+ * WHY A NEW FIELD RATHER THAN THE EXISTING `order` COLUMNS.
+ *
+ * cards.order and folders.order are two INDEPENDENT sequences: cards run
+ * 0..n and folders run 0..m, each sorted within its own collection. Neither
+ * can express "this folder sits between these two cards", because there is no
+ * shared axis to compare a card's 3 against a folder's 3. Interleaving needs
+ * one ordering that spans both, and that is what this is.
+ *
+ * It is stored as ONE ARRAY on the child profile the caregiver already owns --
+ * no new collection, no new ownership model, and the existing per-collection
+ * `order` values are left exactly as they are, so nothing already saved is
+ * destroyed and turning this off falls back to the old behaviour.
+ *
+ * Entries are { type: "card" | "folder", id }. The type is stored because a
+ * card id and a folder id are drawn from different collections and could
+ * otherwise not be told apart when reading the layout back.
+ *
+ * SCOPING. childProfileId comes from the session; a userId or childId in the
+ * body is never consulted for authorization. Every id is proven to belong to
+ * this child before anything is written.
+ */
+app.put("/api/child-profile/home-order", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const childProfileId = req.childProfile._id;
+        const { items } = req.body || {};
+
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "A list of home items in their new order is required."
+            });
+        }
+
+        if (items.length > 1000) {
+            return res.status(400).json({
+                success: false,
+                message: "That is more items than a home screen can hold."
+            });
+        }
+
+        const cardIds = [];
+        const folderIds = [];
+        const normalised = [];
+
+        for (const item of items) {
+            if (!item || (item.type !== "card" && item.type !== "folder")) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Each home item must be a card or a folder."
+                });
+            }
+            const id = toObjectId(item.id);
+            if (!id) {
+                return res.status(404).json({ success: false, message: "Item not found." });
+            }
+            if (item.type === "card") cardIds.push(id);
+            else folderIds.push(id);
+            normalised.push({ type: item.type, id });
+        }
+
+        /* A repeated entry would put one thing in two places. */
+        const seen = new Set(normalised.map((entry) => `${entry.type}:${entry.id}`));
+        if (seen.size !== normalised.length) {
+            return res.status(400).json({
+                success: false,
+                message: "The same item was listed more than once."
+            });
+        }
+
+        /*
+         * EVERY ID MUST BELONG TO THIS CHILD -- checked before any write, so a
+         * request naming another child's card or folder changes nothing.
+         */
+        if (cardIds.length) {
+            const ownedCards = await cards
+                .find({ _id: { $in: cardIds }, childProfileId }, { projection: { _id: 1 } })
+                .toArray();
+            if (ownedCards.length !== cardIds.length) {
+                return res.status(404).json({ success: false, message: "Item not found." });
+            }
+        }
+
+        if (folderIds.length) {
+            const ownedFolders = await folders
+                .find({ _id: { $in: folderIds }, childProfileId }, { projection: { _id: 1 } })
+                .toArray();
+            if (ownedFolders.length !== folderIds.length) {
+                return res.status(404).json({ success: false, message: "Item not found." });
+            }
+        }
+
+        await childProfiles.updateOne(
+            { _id: childProfileId },
+            { $set: { homeOrder: normalised, updatedAt: new Date() } }
+        );
+
+        return res.status(200).json({ success: true, saved: normalised.length });
+
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "saving home order");
+        }
+        console.log("Saving home order failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not save the home positions. Please try again."
+        });
+    }
+});
+
+/*
+ * DELETE /api/child-profile/home-order -- forget the mixed layout.
+ *
+ * Removing the field is the whole reset: with no layout stored the home screen
+ * falls back to the default arrangement built from each collection's own
+ * `order`, which is exactly what a child who never customised anything sees.
+ * No card or folder is touched.
+ */
+app.delete("/api/child-profile/home-order", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        await childProfiles.updateOne(
+            { _id: req.childProfile._id },
+            { $unset: { homeOrder: "" }, $set: { updatedAt: new Date() } }
+        );
+        return res.status(200).json({ success: true });
+
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "resetting home order");
+        }
+        console.log("Resetting home order failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not reset the home positions. Please try again."
+        });
+    }
+});
+
 app.get("/api/card-images", requireAuth, requireChildProfile, async (req, res) => {
     try {
         const images = [];
@@ -2303,6 +2540,142 @@ app.post("/api/folders", requireAuth, requireChildProfile, async (req, res) => {
  * check: another family's folder id simply matches nothing and gets a 404.
  * There is no separate "do you own this?" query that could be omitted.
  */
+/*
+ * PUT /api/folders/order -- save a rearranged folder order for THIS child.
+ *
+ * Declared BEFORE the /api/folders/:id routes: Express matches in order, so
+ * "order" would otherwise be read as an id and reach the wrong handler.
+ *
+ * IT REUSES THE EXISTING `order` FIELD, the same one the board already sorts
+ * folders on. There is no second ordering system: a saved arrangement is the
+ * same field the default order was seeded into, so nothing is duplicated and
+ * a folder's name, icon, colour and cards are untouched.
+ *
+ * This exists rather than looping PATCH /api/folders/:id because that route
+ * moves ONE folder at a time -- N requests for N folders, any of which could
+ * fail and leave the board in an order neither the caregiver nor the default
+ * describes. One bulk write cannot half-apply.
+ *
+ * SCOPING. childProfileId comes from the session via requireChildProfile and
+ * is never accepted from the client; every update is filtered on it, and
+ * ownership of every id is proven before anything is written.
+ *
+ * Body: { ids: [folderId, ...] } in the new display order.
+ */
+app.put("/api/folders/order", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const childProfileId = req.childProfile._id;
+        const { ids } = req.body || {};
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "A list of folders in their new order is required."
+            });
+        }
+
+        if (ids.length > 500) {
+            return res.status(400).json({
+                success: false,
+                message: "That is more folders than a board can hold."
+            });
+        }
+
+        const objectIds = ids.map(toObjectId);
+
+        if (objectIds.some((id) => !id)) {
+            return res.status(404).json({ success: false, message: "Folder not found." });
+        }
+
+        /* A repeated id would give two folders the same position and silently
+           drop one from the arrangement. */
+        const unique = new Set(objectIds.map(String));
+        if (unique.size !== objectIds.length) {
+            return res.status(400).json({
+                success: false,
+                message: "The same folder was listed more than once."
+            });
+        }
+
+        /*
+         * EVERY FOLDER MUST BELONG TO THIS CHILD.
+         *
+         * Checked as a set so one query answers it, and checked BEFORE any
+         * write so a request naming another child's folder changes nothing at
+         * all rather than partially applying.
+         */
+        const owned = await folders
+            .find({ _id: { $in: objectIds }, childProfileId }, { projection: { _id: 1 } })
+            .toArray();
+
+        if (owned.length !== objectIds.length) {
+            return res.status(404).json({ success: false, message: "Folder not found." });
+        }
+
+        const operations = objectIds.map((id, index) => ({
+            updateOne: {
+                filter: { _id: id, childProfileId },
+                update: { $set: { order: index, updatedAt: new Date() } }
+            }
+        }));
+
+        await folders.bulkWrite(operations, { ordered: false });
+
+        return res.status(200).json({ success: true, saved: objectIds.length });
+
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "saving folder order");
+        }
+        console.log("Saving folder order failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not save the folder positions. Please try again."
+        });
+    }
+});
+
+/*
+ * DELETE /api/folders/order -- forget this child's folder arrangement.
+ *
+ * Restores the DEFAULT order rather than deleting anything: no folder is
+ * removed and no card moves, only the `order` field. `key` is the seed key
+ * each default folder was created from, so sorting by it reproduces the
+ * arrangement the board shipped with.
+ */
+app.delete("/api/folders/order", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const childProfileId = req.childProfile._id;
+
+        const all = await folders
+            .find({ childProfileId }, { projection: { _id: 1, key: 1 } })
+            .toArray();
+
+        all.sort((a, b) => String(a.key || "").localeCompare(String(b.key || "")));
+
+        const operations = all.map((folder, index) => ({
+            updateOne: {
+                filter: { _id: folder._id, childProfileId },
+                update: { $set: { order: index, updatedAt: new Date() } }
+            }
+        }));
+
+        if (operations.length) await folders.bulkWrite(operations, { ordered: false });
+
+        return res.status(200).json({ success: true, reset: operations.length });
+
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "resetting folder order");
+        }
+        console.log("Resetting folder order failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not reset the folder positions. Please try again."
+        });
+    }
+});
+
 app.patch("/api/folders/:id", requireAuth, requireChildProfile, async (req, res) => {
     try {
         const folderId = toObjectId(req.params.id);
@@ -2789,6 +3162,147 @@ app.patch("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) =
 });
 
 /* DELETE /api/cards/:id */
+/*
+ * PUT /api/cards/order -- save a rearranged card order for THIS child.
+ *
+ * Movability lets a caregiver drag cards into the order that suits the child.
+ * This is where that order is kept.
+ *
+ * IT REUSES THE EXISTING `order` FIELD. Every card already has one, and the
+ * board already sorts on it, so a saved arrangement is not a second source of
+ * truth layered on top -- it is the same field the default order was written
+ * into at seed time. Nothing is duplicated, and no pixel coordinates are
+ * stored: the order is a LOGICAL sequence, which is why it survives a change
+ * of Grid Size or Card Position untouched.
+ *
+ * SCOPING. childProfileId comes from the session via requireChildProfile and
+ * is never accepted from the client, and every update is filtered on it. So
+ * Lola's arrangement cannot land on Neo's cards even if the request asks for
+ * it -- the same rule the rest of this file follows.
+ *
+ * The body is { ids: [cardId, ...] } in the new display order.
+ */
+app.put("/api/cards/order", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const childProfileId = req.childProfile._id;
+        const { ids } = req.body || {};
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "A list of cards in their new order is required."
+            });
+        }
+
+        /* Guard against an unreasonable payload before touching the database. */
+        if (ids.length > 2000) {
+            return res.status(400).json({
+                success: false,
+                message: "That is more cards than a board can hold."
+            });
+        }
+
+        const objectIds = ids.map(toObjectId);
+
+        if (objectIds.some((id) => !id)) {
+            return res.status(400).json({ success: false, message: "Card not found." });
+        }
+
+        /*
+         * EVERY CARD MUST BELONG TO THIS CHILD.
+         *
+         * Checked as a set rather than per-card so one query answers it, and
+         * checked BEFORE any write so a request naming someone else's card
+         * changes nothing at all rather than partially applying.
+         */
+        const owned = await cards
+            .find({ _id: { $in: objectIds }, childProfileId }, { projection: { _id: 1 } })
+            .toArray();
+
+        if (owned.length !== objectIds.length) {
+            return res.status(404).json({ success: false, message: "Card not found." });
+        }
+
+        /*
+         * Written as one bulk operation: a half-applied order would leave the
+         * board in a state neither the caregiver nor the default describes.
+         * The index in the array IS the new order value.
+         */
+        const operations = objectIds.map((id, index) => ({
+            updateOne: {
+                filter: { _id: id, childProfileId },
+                update: { $set: { order: index, updatedAt: new Date() } }
+            }
+        }));
+
+        await cards.bulkWrite(operations, { ordered: false });
+
+        return res.status(200).json({ success: true, saved: objectIds.length });
+
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "saving card order");
+        }
+        console.log("Saving card order failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not save the card positions. Please try again."
+        });
+    }
+});
+
+/*
+ * DELETE /api/cards/order -- forget this child's arrangement.
+ *
+ * "Reset Card Positions". It restores the DEFAULT order rather than deleting
+ * anything: the cards themselves, their words and their pictures are all
+ * untouched, and only the `order` field moves. Scoped to one child, so
+ * resetting Lola cannot disturb Neo.
+ *
+ * The default order is the seed order, which is what `key` encodes -- the
+ * filename-derived key each card was created from. Sorting by it reproduces
+ * the arrangement the board shipped with.
+ */
+app.delete("/api/cards/order", requireAuth, requireChildProfile, async (req, res) => {
+    try {
+        const childProfileId = req.childProfile._id;
+
+        /* Folder membership is part of the default arrangement, so cards are
+           grouped by folder first and then by their seed key. */
+        const all = await cards
+            .find({ childProfileId }, { projection: { _id: 1, key: 1, folderId: 1 } })
+            .toArray();
+
+        all.sort((a, b) => {
+            const folderA = a.folderId ? String(a.folderId) : "";
+            const folderB = b.folderId ? String(b.folderId) : "";
+            if (folderA !== folderB) return folderA < folderB ? -1 : 1;
+            return String(a.key || "").localeCompare(String(b.key || ""));
+        });
+
+        const operations = all.map((card, index) => ({
+            updateOne: {
+                filter: { _id: card._id, childProfileId },
+                update: { $set: { order: index, updatedAt: new Date() } }
+            }
+        }));
+
+        if (operations.length) await cards.bulkWrite(operations, { ordered: false });
+
+        return res.status(200).json({ success: true, reset: operations.length });
+
+    } catch (error) {
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "resetting card order");
+        }
+        console.log("Resetting card order failed:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Could not reset the card positions. Please try again."
+        });
+    }
+});
+
 app.delete("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) => {
     try {
         const cardId = toObjectId(req.params.id);

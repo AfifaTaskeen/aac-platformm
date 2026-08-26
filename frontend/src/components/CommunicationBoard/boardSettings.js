@@ -523,3 +523,92 @@ export function saveNavPosition(id) {
     // Saving failed; the choice still applies for this session.
   }
 }
+
+/* -------------------------------------------------------------------------
+   CARD FLEXIBILITY
+
+   Whether a caregiver can drag cards into a different order.
+
+   OFF is the default and is exactly today's behaviour: cards are tapped to
+   speak, and nothing moves. It has to be the default, because a child tapping
+   to communicate must never accidentally drag their words out of place --
+   this is a caregiver tool, switched on deliberately and switched off again.
+
+   Turning it OFF only stops EDITING. A saved arrangement is data, not a mode,
+   so it keeps applying whether this is on or off -- switching off must never
+   silently discard what a caregiver saved.
+
+   PERSISTED PER CHILD, IN MONGODB -- not in localStorage.
+
+   It belongs to the child, not the device: a caregiver who enables reordering
+   for Lola on the tablet should find it enabled for Lola on the phone, and
+   must never find it enabled for Neo. localStorage cannot express that, so
+   this setting rides on the child profile alongside the card order itself.
+
+   The functions below are the LOCAL MIRROR of that value, used so the board
+   can render immediately on load instead of flashing the wrong state while
+   the profile request is in flight. The database is the source of truth; this
+   is a cache of it, refreshed whenever the profile is read.
+   ------------------------------------------------------------------------- */
+export const CARD_FLEXIBILITY = [
+  {
+    id: 'off',
+    label: 'Off',
+    description: 'Cards stay where they are',
+  },
+  {
+    id: 'on',
+    label: 'On',
+    description: 'Drag cards to rearrange',
+  },
+]
+
+export const DEFAULT_CARD_FLEXIBILITY = 'off'
+
+const CARD_FLEXIBILITY_STORAGE_KEY = 'buddytalk.cardFlexibility'
+
+export function getCardFlexibility(id) {
+  return (
+    CARD_FLEXIBILITY.find((m) => m.id === id) ||
+    CARD_FLEXIBILITY.find((m) => m.id === DEFAULT_CARD_FLEXIBILITY)
+  )
+}
+
+/*
+ * The cache is keyed BY CHILD.
+ *
+ * A single shared key was a real hazard: it survives logout, so a caregiver
+ * who enabled reordering for one child left "on" behind for whoever signed in
+ * next. The database always corrected it a moment later -- measured, the
+ * profile arrives before the board paints, so no wrong state was ever
+ * observed on screen -- but that timing is not something to depend on. A
+ * slower network, a larger board, or a future change to when the profile is
+ * fetched would turn it into a visible bug.
+ *
+ * Keying by child profile id removes the possibility rather than relying on
+ * the race staying won: one child's cached value is simply not readable as
+ * another's. An unknown id falls back to the default, never to a neighbour.
+ */
+function flexibilityKeyFor(childProfileId) {
+  return childProfileId
+    ? `${CARD_FLEXIBILITY_STORAGE_KEY}.${childProfileId}`
+    : CARD_FLEXIBILITY_STORAGE_KEY
+}
+
+export function loadCardFlexibility(childProfileId) {
+  try {
+    const saved = window.localStorage.getItem(flexibilityKeyFor(childProfileId))
+    if (saved && CARD_FLEXIBILITY.some((m) => m.id === saved)) return saved
+  } catch {
+    // Storage unavailable -- fall through to the default.
+  }
+  return DEFAULT_CARD_FLEXIBILITY
+}
+
+export function saveCardFlexibility(id, childProfileId) {
+  try {
+    window.localStorage.setItem(flexibilityKeyFor(childProfileId), id)
+  } catch {
+    // Saving failed; the choice still applies for this session.
+  }
+}

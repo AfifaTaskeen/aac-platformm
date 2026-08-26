@@ -3010,3 +3010,155 @@
   color: var(--color-coral-text);
   font-weight: 700;
 }
+
+/* ==========================================================================
+   MOVABILITY -- drag to rearrange
+
+   The wrapper exists only to carry the pointer handlers. It must be
+   LAYOUT-TRANSPARENT: it is the grid item now, so it has to occupy the cell
+   exactly as the card used to, or every card would change size the moment
+   rearrange mode existed. `display: contents` is not usable here -- the
+   element must have a box to receive pointer events -- so it takes the full
+   cell instead and the card fills it.
+   ========================================================================== */
+.cmove {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.cmove > .ccard {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Only while rearranging. With Movability off this element is an inert box. */
+.cmove--on {
+  cursor: grab;
+  /* Stops the browser treating a drag as a scroll or a text selection, which
+     is what makes touch dragging work at all on a phone. */
+  touch-action: none;
+  user-select: none;
+}
+
+.cmove--on:active {
+  cursor: grabbing;
+}
+
+/*
+   THE INSERTION INDICATOR.
+
+   The card being dragged is lifted out and follows the finger as a floating
+   copy, so the space it occupies in the grid IS the drop indicator -- it sits
+   exactly where the card will land, and it moves as the other cards reflow
+   around it. That is more honest than a separate marker, which can only ever
+   describe the position it is trying to represent.
+
+   The real card is kept in the layout (it still holds the cell) but shown as
+   an empty dashed outline.
+*/
+.cmove--dragging > .ccard {
+  opacity: 0.25;
+  outline: 3px dashed var(--color-edge, #14141c);
+  outline-offset: -3px;
+  /* The floating copy is the thing being moved; this must not also react to
+     the pointer or it would fight the drag. */
+  pointer-events: none;
+}
+
+/*
+   THE REFLOW.
+
+   Cards animate to their new cell as the order changes, so a caregiver sees
+   them move aside rather than teleport. Only transform is animated -- it
+   takes no part in layout, so this cannot cause a reflow of its own.
+
+   Suppressed under reduced motion further down, where movement is the thing
+   being avoided.
+*/
+.cmove--on {
+  transition: transform 160ms ease-out;
+}
+
+/* The copy under the finger. Lifted, slightly larger and tilted, so it reads
+   as "held" rather than as a second card sitting in the grid. */
+.cmove__ghost {
+  transform: scale(1.04) rotate(-1.5deg);
+  box-shadow: 0 18px 38px rgba(43, 43, 58, 0.34);
+  opacity: 0.95;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmove--on {
+    transition: none;
+  }
+
+  .cmove__ghost {
+    transform: none;
+  }
+}
+
+/* The save bar, shown only while rearranging. */
+.cmovebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: clamp(6px, 1vw, 12px);
+  padding: clamp(6px, 1vh, 10px) clamp(8px, 1.5vw, 16px);
+  background: var(--color-surface, #fff);
+  border: 2px solid var(--color-edge, #14141c);
+  border-radius: 14px;
+  margin-bottom: clamp(6px, 1vh, 10px);
+}
+
+.cmovebar__hint {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.85rem, 1.8vh, 1rem);
+  color: var(--color-on-tint);
+}
+
+.cmovebar__btn {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: clamp(0.85rem, 1.8vh, 1rem);
+  padding: clamp(6px, 1.2vh, 10px) clamp(10px, 1.8vw, 18px);
+  border: 2px solid var(--color-edge, #14141c);
+  border-radius: 12px;
+  background: var(--color-mint, #cfeee6);
+  color: var(--color-ink, #2b2b3a);
+  cursor: pointer;
+}
+
+.cmovebar__btn--reset {
+  background: var(--color-surface, #fff);
+}
+
+.cmovebar__btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.cmovebar__status {
+  font-family: var(--font-body);
+  font-size: clamp(0.8rem, 1.6vh, 0.95rem);
+}
+
+.cmovebar__status--error {
+  color: var(--color-coral-text, #a33);
+}
+
+/* Folder tiles use the same drag wrapper as cards, so they inherit the
+   grab cursor, the drop outline and the reflow transition with no rules of
+   their own. This only names the kind for the drag logic's slot query. */
+.cmove--folder {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.cmove--folder > .cfolder {
+  flex: 1;
+  min-width: 0;
+}

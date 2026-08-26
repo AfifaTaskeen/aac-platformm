@@ -500,3 +500,65 @@ export async function fetchCardImages({ signal } = {}) {
     return []
   }
 }
+
+/*
+ * Saves a rearranged card order for the signed-in child.
+ *
+ * `ids` is the card ids in their new display order. childProfileId is not
+ * sent -- the backend derives it from the session, which is what keeps one
+ * child's arrangement off another child's board.
+ */
+export async function saveCardOrder(ids) {
+  return sendJson('/api/cards/order', 'PUT', { ids })
+}
+
+/* Forgets this child's arrangement, returning them to the default order.
+   Only the `order` field changes; no card is deleted. */
+export async function resetCardOrder() {
+  return sendJson('/api/cards/order', 'DELETE')
+}
+
+/*
+ * Saves a board setting against the signed-in child's profile.
+ *
+ * Settings that belong to the CHILD rather than the device go here, so they
+ * follow that child to any browser and never leak to a sibling. childProfileId
+ * is not sent -- the backend derives it from the session.
+ */
+export async function saveChildSettings(settings) {
+  return sendJson('/api/child-profile/settings', 'PATCH', settings)
+}
+
+/*
+ * Saves a rearranged FOLDER order for the signed-in child.
+ *
+ * `ids` is the folder database ids in their new display order -- the
+ * `folderId` on each category, not the palette key the tile is rendered with.
+ * childProfileId is not sent: the backend derives it from the session.
+ */
+export async function saveFolderOrder(ids) {
+  return sendJson('/api/folders/order', 'PUT', { ids })
+}
+
+/* Forgets this child's folder arrangement, restoring the default order.
+   No folder is deleted and no card moves. */
+export async function resetFolderOrder() {
+  return sendJson('/api/folders/order', 'DELETE')
+}
+
+/*
+ * Saves the HOME SCREEN's mixed card+folder layout for the signed-in child.
+ *
+ * `items` is [{ type: 'card' | 'folder', id }, ...] in display order. This is
+ * the only ordering that can interleave the two, because a card's `order` and
+ * a folder's `order` are separate sequences with no shared axis.
+ */
+export async function saveHomeOrder(items) {
+  return sendJson('/api/child-profile/home-order', 'PUT', { items })
+}
+
+/* Forgets the mixed layout, returning the home screen to its default
+   arrangement. No card or folder is changed. */
+export async function resetHomeOrder() {
+  return sendJson('/api/child-profile/home-order', 'DELETE')
+}

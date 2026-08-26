@@ -21,12 +21,22 @@ import {
   saveCardPosition,
   loadNavPosition,
   saveNavPosition,
+  loadCardFlexibility,
+  saveCardFlexibility,
   loadAnimation,
   saveAnimation,
   hasAnimationChoice,
   prefersReducedMotion,
 } from './boardSettings'
-import { fetchBoard } from './boardApi'
+import {
+  fetchBoard,
+  saveCardOrder,
+  resetCardOrder,
+  resetFolderOrder,
+  saveHomeOrder,
+  resetHomeOrder,
+  saveChildSettings,
+} from './boardApi'
 /*
  * The PALETTE only. The words and folders now come from MongoDB; cardData.js
  * still owns what each category LOOKS like, because a colour is presentation
@@ -66,6 +76,16 @@ const FALLBACK_GRID_SIZE = 3
  * as opening any other folder does -- the same documents, no duplication.
  */
 const CORE_WORDS_KEY = 'core'
+
+/*
+ * The key the HOME board's core words are arranged under.
+ *
+ * Deliberately its own value rather than reusing CORE_WORDS_KEY: the five
+ * quick-access words on the home screen and the full Core Words folder are
+ * different LISTS even though they draw on the same documents, so they get
+ * their own arrangement and reordering one never disturbs the other.
+ */
+const HOME_CATEGORY_KEY = '__home__'
 
 /*
  * The key the Emergency folder is filed under.
@@ -186,6 +206,182 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * ends up with, which layout recomputes on the new side.
    */
   const [navPositionId, setNavPositionId] = useState(loadNavPosition)
+
+  /*
+   * MOVABILITY -- the caregiver's rearrange mode.
+   *
+   * Off by default and off for a child using the board: dragging is a
+   * caregiver action, and a child tapping to speak must never shove their own
+   * words out of place.
+   */
+  /*
+   * Seeded from this CHILD's cached value, so the first paint is already
+   * right for whoever is signed in -- never from a value another child left
+   * behind.
+   */
+  /*
+   * Read out once so the effects below can depend on plain values rather than
+   * on the profile object, which is a new reference on every fetch and would
+   * re-run them needlessly.
+   */
+  const profileId = childProfile?.id
+  const profileFlexibility = childProfile?.cardFlexibility
+
+  const [cardFlexibilityId, setCardFlexibilityId] = useState(() =>
+    loadCardFlexibility(profileId),
+  )
+  const isMovable = cardFlexibilityId === 'on'
+
+  /*
+   * THE CHILD PROFILE IS THE SOURCE OF TRUTH for this setting.
+   *
+   * The localStorage value above is only a cache, read synchronously so the
+   * board does not flash the wrong state on first paint. Once the profile
+   * arrives -- which carries the value saved for THIS child -- it wins, which
+   * is what makes the setting follow the child between devices and stops one
+   * child inheriting another's.
+   */
+  useEffect(() => {
+    /*
+     * KEYED ON THE PROFILE ID AS WELL AS THE VALUE.
+     *
+     * Depending on the boolean alone was not enough: switching from one child
+     * with reordering on to ANOTHER child with it on leaves the dependency
+     * unchanged, so this would not re-run and the new child would inherit
+     * whatever the previous one left in state. Including the id means every
+     * change of child re-syncs, whatever the two values happen to be.
+     */
+    if (!profileId) return
+    const fromProfile = profileFlexibility ? 'on' : 'off'
+    setCardFlexibilityId(fromProfile)
+    saveCardFlexibility(fromProfile, profileId)
+  }, [profileId, profileFlexibility])
+
+
+  /*
+   * The rearranged order, held ONLY in memory until Save Positions.
+   *
+   * A Map of folder key -> array of card ids. null means "nothing has been
+   * dragged", which is deliberately different from an empty arrangement: it
+   * is what lets the board show the saved order straight from the database
+   * and lets Save Positions know there is nothing to save.
+   *
+   * Not written on every drop, because a caregiver mid-rearrange has a board
+   * in a state they have not agreed to yet -- and a half-finished shuffle
+   * saved by accident is worse than one they have to confirm.
+   */
+  const [pendingOrder, setPendingOrder] = useState(null)
+
+  /*
+   * The rearranged FOLDER order, held in memory until Save Positions.
+   *
+   * Kept separate from pendingOrder because folders and cards are different
+   * collections with their own endpoints -- mixing them into one list would
+   * mean one array whose entries need two different kinds of save. null means
+   * "no folder has been dragged", which is what lets Save know whether there
+   * is a folder change to commit at all.
+   */
+
+  /*
+   * The rearranged HOME layout: cards and folders interleaved, in memory
+   * until Save Positions.
+   *
+   * Entries are { type, id }. It supersedes the two separate pending lists on
+   * the home screen, because a mixed order cannot be expressed as "cards in
+   * this order" plus "folders in that order" -- the whole point is that one
+   * can sit between two of the other.
+   */
+  const [pendingHomeOrder, setPendingHomeOrder] = useState(null)
+
+  /*
+   * The layout most recently SAVED in this session.
+   *
+   * childProfile.homeOrder is fetched once by App and is not refetched when
+   * the board reloads -- reloadCount refreshes the BOARD, while this lives on
+   * the PROFILE. Without this the UI reverted to the previous layout the
+   * moment a save cleared pendingHomeOrder, even though the save had
+   * succeeded. Holding the saved value keeps what is on screen equal to what
+   * is in the database until the next full page load replaces both.
+   *
+   * null      -- nothing saved this session; fall back to the profile
+   * []        -- explicitly RESET this session; the profile's stale value
+   *              must be ignored, not fallen back to
+   * [items]   -- the layout just saved
+   */
+  const [savedHomeOrder, setSavedHomeOrder] = useState(null)
+  const [isSavingOrder, setIsSavingOrder] = useState(false)
+  const [orderStatus, setOrderStatus] = useState(null)
+
+  /*
+   * THE LIVE DRAG.
+   *
+   * `draggingId` is the card currently held. It is state because the grid has
+   * to re-render as the order changes underneath it -- that live reflow IS
+   * the feature: the other cards shift out of the way while the finger is
+   * still down, rather than snapping into place on release.
+   *
+   * Everything the pointer handlers need on every move is a ref, not state:
+   * they fire dozens of times a second, and routing that through React would
+   * make the drag lag behind the finger.
+   */
+  const [draggingId, setDraggingId] = useState(null)
+
+  /*
+   * A CHANGE OF CHILD DISCARDS EVERYTHING HELD FOR THE PREVIOUS ONE.
+   *
+   * pendingOrder is an unsaved rearrangement and belongs to exactly one
+   * child; carrying it across a sign-out would apply one child's edits to
+   * another's board. The board data itself is re-fetched, but this local
+   * state is not, so it is cleared explicitly.
+   *
+   * Placed after the state it clears: a hook that referenced these setters
+   * before their declaration would throw at runtime, which a production build
+   * does not catch.
+   */
+  useEffect(() => {
+    setPendingOrder(null)
+    setPendingHomeOrder(null)
+    setSavedHomeOrder(null)
+    setDraggingId(null)
+    setOrderStatus(null)
+    endDrag()
+  }, [profileId])
+  const dragRef = useRef({
+    id: null,
+    categoryKey: null,
+    /* Where in the card the finger grabbed it, so the clone keeps the same
+       spot under the finger instead of jumping to its centre. */
+    grabX: 0,
+    grabY: 0,
+    width: 0,
+    height: 0,
+    /* The floating copy that follows the pointer. */
+    clone: null,
+    pointerId: null,
+    /* The auto-scroll loop, running only while a drag is near an edge. */
+    frame: null,
+    lastClientY: 0,
+    lastClientX: 0,
+    /* 'card' or 'folder' -- decides which list the drag reorders. */
+    kind: 'card',
+  })
+
+  /* Leaving rearrange mode abandons anything not saved, so the board never
+     keeps showing an order the caregiver did not commit to. */
+  useEffect(() => {
+    if (!isMovable) {
+      setPendingOrder(null)
+        setPendingHomeOrder(null)
+      setDraggingId(null)
+      endDrag()
+    }
+  }, [isMovable])
+
+  /* A drag must not outlive the component -- an unmount mid-drag would
+     otherwise leave the floating clone on screen with nothing to remove it. */
+  useEffect(() => {
+    return () => endDrag()
+  }, [])
 
   /*
    * Whether tapping a card plays the "come forward" animation. On by default;
@@ -423,6 +619,668 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * Normal deliberately adds NO class, so the grid keeps exactly the layout
    * it had before this setting existed.
    */
+  /*
+   * The cards of one folder in the order to DISPLAY: the pending rearrange if
+   * there is one, otherwise exactly what the backend sent (which is already
+   * sorted on `order`, so a saved arrangement arrives applied).
+   */
+  /*
+   * The cards belonging to one arrangement, straight from the board data.
+   *
+   * The home board's core words are not a folder, so they are looked up
+   * separately -- this is the single place that distinction lives, which is
+   * what lets every other function treat the two the same.
+   */
+  function cardsForCategory(categoryKey) {
+    if (categoryKey === HOME_CATEGORY_KEY) return board?.basicWords || []
+    return board?.cardsByCategory.get(categoryKey) || []
+  }
+
+  function orderedCards(categoryKey, cards) {
+    const pending = pendingOrder?.get(categoryKey)
+    if (!pending) return cards
+
+    const byId = new Map(cards.map((card) => [card.id, card]))
+    const result = []
+    for (const id of pending) {
+      const card = byId.get(id)
+      if (card) {
+        result.push(card)
+        byId.delete(id)
+      }
+    }
+    /* Anything the pending list does not mention (a card added since the drag
+       began) keeps its place at the end rather than vanishing. */
+    for (const card of byId.values()) result.push(card)
+    return result
+  }
+
+  /*
+   * Moves a card to a given INDEX in its folder, live.
+   *
+   * Called continuously while dragging, so the grid reflows under the finger.
+   * Works on IDS and an index, never on pixel positions: the result is a
+   * logical sequence, which is what makes it survive a change of Grid Size,
+   * Card Position or screen size untouched -- and it is the same array that
+   * Save Positions later sends.
+   */
+  function moveCardToIndex(categoryKey, cardId, targetIndex) {
+    const current = orderedCards(categoryKey, cardsForCategory(categoryKey))
+    const ids = current.map((card) => card.id)
+    const fromIndex = ids.indexOf(cardId)
+    if (fromIndex < 0) return
+
+    /*
+     * THE INDEX IS MEASURED AGAINST THE LIST AS IT LOOKS NOW, but the card is
+     * removed before it is re-inserted -- which shifts every slot after it
+     * down by one. Without this correction a drop lands one place late, and
+     * dropping onto the first card gave index 1: the first position was only
+     * reachable by aiming at the very left edge of the card.
+     */
+    const adjusted = targetIndex > fromIndex ? targetIndex - 1 : targetIndex
+    const clamped = Math.max(0, Math.min(adjusted, ids.length - 1))
+    if (clamped === fromIndex) return
+
+    ids.splice(clamped, 0, ids.splice(fromIndex, 1)[0])
+
+    setPendingOrder((previous) => {
+      const next = new Map(previous || [])
+      next.set(categoryKey, ids)
+      return next
+    })
+    setOrderStatus(null)
+  }
+
+  /*
+   * The folder tiles in the order to DISPLAY: the pending rearrangement if
+   * there is one, otherwise exactly what the backend sent (already sorted on
+   * `order`, so a saved arrangement arrives applied).
+   *
+   * Matched on `folderId` -- the real database id -- rather than on the tile's
+   * palette key, because that is what the reorder endpoint writes and what
+   * makes two folders sharing a colour still distinct.
+   */
+
+
+  /*
+   * THE HOME SCREEN AS ONE ORDERED LIST.
+   *
+   * Cards and folders are still separate MongoDB entities -- nothing is
+   * converted -- but for dragging they are one sequence, which is what lets a
+   * folder sit between two cards.
+   *
+   * Order of precedence:
+   *   1. an unsaved rearrangement in this session
+   *   2. the layout saved on the child profile
+   *   3. the default: cards then folders, each in its own `order`
+   *
+   * Anything the saved layout does not mention (a card or folder added since)
+   * is appended rather than dropped, so new content always appears.
+   */
+  function homeItems() {
+    const cards = (board?.basicWords || []).map((card) => ({
+      type: 'card',
+      id: card.id,
+      card,
+    }))
+    const folders = (board?.categories || []).map((category) => ({
+      type: 'folder',
+      id: category.folderId,
+      category,
+    }))
+    const all = [...cards, ...folders]
+
+    /* An empty savedHomeOrder means Reset was pressed: the profile still
+       carries the old layout until the next page load, so it is deliberately
+       not consulted. */
+    const saved =
+      pendingHomeOrder ||
+      (savedHomeOrder === null ? childProfile?.homeOrder : savedHomeOrder)
+    if (!saved || !saved.length) return all
+
+    const byKey = new Map(all.map((item) => [`${item.type}:${item.id}`, item]))
+    const result = []
+    for (const entry of saved) {
+      const item = byKey.get(`${entry.type}:${entry.id}`)
+      if (item) {
+        result.push(item)
+        byKey.delete(`${entry.type}:${entry.id}`)
+      }
+    }
+    for (const item of byKey.values()) result.push(item)
+    return result
+  }
+
+  /*
+   * Moves one home item to an index, live, while dragging.
+   *
+   * Works on the MERGED list, so a card and a folder can take each other's
+   * place. Identical shape to moveCardToIndex -- ids and an index, never pixel
+   * positions -- so the result survives a change of Grid Size or screen size.
+   */
+  function moveHomeItemToIndex(type, id, targetIndex) {
+    const items = homeItems()
+    const keys = items.map((item) => ({ type: item.type, id: item.id }))
+    const fromIndex = keys.findIndex((k) => k.type === type && k.id === id)
+    if (fromIndex < 0) return
+
+    const adjusted = targetIndex > fromIndex ? targetIndex - 1 : targetIndex
+    const clamped = Math.max(0, Math.min(adjusted, keys.length - 1))
+    if (clamped === fromIndex) return
+
+    keys.splice(clamped, 0, keys.splice(fromIndex, 1)[0])
+    setPendingHomeOrder(keys)
+    setOrderStatus(null)
+  }
+
+  /*
+   * Which slot the pointer is over.
+   *
+   * Measured from the CARDS THEMSELVES rather than from arithmetic on column
+   * counts and gaps: the grid already knows where every card is, and reading
+   * it back cannot drift out of step with the layout the way a parallel
+   * calculation would.
+   *
+   * The rule is "which card's midpoint has the pointer passed": before the
+   * horizontal midpoint means insert here, after it means insert after. That
+   * is what lets a card reach the very first and very last position, which
+   * an "swap with the card underneath" rule cannot express.
+   */
+  function slotIndexAt(clientX, clientY, selector = '.cmove') {
+    const area = cardAreaRef.current
+    if (!area) return null
+    /*
+     * SCOPED TO THE DRAGGED ITEM'S OWN KIND.
+     *
+     * Cards and folder tiles share the .cmove wrapper and sit in ONE grid, so
+     * an unscoped query would let a folder drop into a card's slot and vice
+     * versa -- two different collections, two different endpoints, and an
+     * index that means nothing in the other list. The caller passes the
+     * selector for the list being dragged, so a drag can only ever land among
+     * its own kind.
+     */
+    const nodes = [...area.querySelectorAll(selector)]
+    if (!nodes.length) return null
+
+    const boxes = nodes.map((node, index) => {
+      const r = node.getBoundingClientRect()
+      return { index, top: r.top, bottom: r.bottom, cx: r.left + r.width / 2, cy: r.top + r.height / 2 }
+    })
+
+    /*
+     * ROW FIRST, THEN COLUMN.
+     *
+     * A plain "nearest card" search fails at the edges, because distance
+     * mixes the two axes: holding at the top of the board but in the middle
+     * column resolved to slot 4 rather than slot 0, so the first position was
+     * unreachable unless the finger was also at the far left. Rows are what a
+     * caregiver is actually aiming at, so they are resolved first and the
+     * column is chosen only within the row.
+     */
+    const rows = []
+    for (const box of boxes) {
+      const row = rows.find((candidate) => Math.abs(candidate.cy - box.cy) < 8)
+      if (row) row.items.push(box)
+      else rows.push({ cy: box.cy, top: box.top, bottom: box.bottom, items: [box] })
+    }
+    rows.sort((a, b) => a.cy - b.cy)
+
+    /*
+     * PAST THE ENDS.
+     *
+     * Above the first row means the very first slot, below the last row means
+     * the very last -- which is what makes both extremes reachable by simply
+     * dragging to the edge, and what auto-scrolling to the top then lands on.
+     */
+    if (clientY < rows[0].top) return 0
+    if (clientY > rows[rows.length - 1].bottom) return boxes.length
+
+    let row = rows.find((candidate) => clientY >= candidate.top && clientY <= candidate.bottom)
+    if (!row) {
+      /* Between two rows (in the grid gap): take the nearer one. */
+      row = rows.reduce((closest, candidate) =>
+        Math.abs(clientY - candidate.cy) < Math.abs(clientY - closest.cy) ? candidate : closest,
+      )
+    }
+
+    const items = [...row.items].sort((a, b) => a.cx - b.cx)
+
+    /*
+     * WITHIN THE ROW: before or after each card's midpoint.
+     *
+     * The comparison has to be INCLUSIVE of the midpoint (`<=`), so that
+     * resting exactly on a card's centre means "take this card's place"
+     * rather than "go after it". With a strict `<` the first position was
+     * unreachable by dropping onto the first card: the pointer sitting
+     * precisely on its centre resolved to the slot after it, and only aiming
+     * at the card's left edge worked.
+     */
+    const last = items[items.length - 1]
+    if (clientX > last.cx) return last.index + 1
+
+    const target = items.find((item) => clientX <= item.cx) || last
+    return target.index
+  }
+
+  /*
+   * AUTO-SCROLL.
+   *
+   * A long folder is taller than the screen, so without this a card could
+   * never travel from the bottom of the list to the top -- the finger would
+   * run out of screen before the card ran out of grid.
+   *
+   * Runs on requestAnimationFrame while the pointer sits within a band at the
+   * top or bottom of the scroll container, with the speed rising the closer
+   * the finger gets to the edge, so a small correction stays controllable and
+   * a deliberate hold at the very edge moves quickly.
+   */
+  function autoScrollStep() {
+    const drag = dragRef.current
+    const area = cardAreaRef.current
+    if (!drag.id || !area) return
+
+    const rect = area.getBoundingClientRect()
+    const band = Math.min(90, rect.height * 0.18)
+    const y = drag.lastClientY
+
+    let delta = 0
+    if (y < rect.top + band) {
+      delta = -Math.ceil(((rect.top + band - y) / band) * 18)
+    } else if (y > rect.bottom - band) {
+      delta = Math.ceil(((y - (rect.bottom - band)) / band) * 18)
+    }
+
+    if (delta !== 0) {
+      const before = area.scrollTop
+      area.scrollTop = before + delta
+      /* Scrolling moved the cards under a stationary finger, so the slot the
+         pointer is over has changed even though the pointer has not. */
+      if (area.scrollTop !== before) {
+        applyDragTo(drag.lastClientX, drag.lastClientY)
+      }
+    }
+
+    drag.frame = window.requestAnimationFrame(autoScrollStep)
+  }
+
+  /* Tears down a drag: removes the floating clone, stops the scroll loop and
+     forgets the held card. Safe to call twice. */
+  function endDrag() {
+    const drag = dragRef.current
+    if (drag.frame) {
+      window.cancelAnimationFrame(drag.frame)
+      drag.frame = null
+    }
+    if (drag.clone) {
+      drag.clone.remove()
+      drag.clone = null
+    }
+    drag.id = null
+    drag.categoryKey = null
+    drag.pointerId = null
+  }
+
+  /*
+   * Starts a drag: builds the floating copy that follows the pointer.
+   *
+   * A CLONE, for the same reason the tap animation uses one -- the real card
+   * stays a grid item, so the grid can keep reflowing around the gap it
+   * leaves, and the thing under the finger is not subject to the scroll
+   * container's clipping.
+   */
+  function beginDrag(event, card, categoryKey, kind = 'card') {
+    const node = event.currentTarget
+    const rect = node.getBoundingClientRect()
+    const drag = dragRef.current
+
+    drag.id = card.id
+    drag.categoryKey = categoryKey
+    drag.kind = kind
+    drag.grabX = event.clientX - rect.left
+    drag.grabY = event.clientY - rect.top
+    drag.width = rect.width
+    drag.height = rect.height
+    drag.pointerId = event.pointerId
+    drag.lastClientX = event.clientX
+    drag.lastClientY = event.clientY
+
+    const clone = node.querySelector('.ccard')?.cloneNode(true)
+    if (clone) {
+      clone.classList.add('cmove__ghost')
+      clone.style.position = 'fixed'
+      clone.style.left = `${rect.left}px`
+      clone.style.top = `${rect.top}px`
+      clone.style.width = `${rect.width}px`
+      clone.style.height = `${rect.height}px`
+      clone.style.margin = '0'
+      clone.style.zIndex = '950'
+      clone.style.pointerEvents = 'none'
+      clone.setAttribute('aria-hidden', 'true')
+      document.body.appendChild(clone)
+      drag.clone = clone
+    }
+
+    setDraggingId(card.id)
+    drag.frame = window.requestAnimationFrame(autoScrollStep)
+  }
+
+  /* Moves the floating copy and reflows the grid under it. */
+  function continueDrag(event) {
+    const drag = dragRef.current
+    if (!drag.id) return
+
+    drag.lastClientX = event.clientX
+    drag.lastClientY = event.clientY
+
+    if (drag.clone) {
+      drag.clone.style.left = `${event.clientX - drag.grabX}px`
+      drag.clone.style.top = `${event.clientY - drag.grabY}px`
+    }
+
+    applyDragTo(event.clientX, event.clientY)
+  }
+
+  /*
+   * Resolves the slot under the pointer and applies the move.
+   *
+   * ON THE HOME SCREEN cards and folders share ONE list, so the slot query
+   * spans both (`.cmove`) and a card can take a folder's place and vice
+   * versa. That shared list is the only thing this change adds.
+   *
+   * INSIDE A FOLDER there is nothing to interleave -- only cards are shown --
+   * so the original card-only path is used unchanged.
+   */
+  function applyDragTo(clientX, clientY) {
+    const drag = dragRef.current
+    if (!drag.id) return
+
+    if (drag.categoryKey === HOME_CATEGORY_KEY) {
+      const index = slotIndexAt(clientX, clientY, '.cmove')
+      if (index != null) moveHomeItemToIndex(drag.kind, drag.id, index)
+      return
+    }
+
+    const index = slotIndexAt(clientX, clientY, '.cmove--card')
+    if (index != null) moveCardToIndex(drag.categoryKey, drag.id, index)
+  }
+
+  /* Commits the rearrangement for the OPEN folder to the database. */
+  async function handleSavePositions() {
+    const cardIds = pendingOrder?.get(activeCategoryKey)
+    /* On the home board a caregiver may have moved cards, folders, or both.
+       Nothing to do only when neither has changed. */
+    /* The mixed home layout -- the one ordering that can interleave the two. */
+    const homeIds = openCategory ? null : pendingHomeOrder
+    if (!cardIds && !homeIds) return
+    setIsSavingOrder(true)
+    setOrderStatus(null)
+    try {
+      /* Both are committed before success is reported, and either failing
+         throws -- so "Positions saved" never appears over a partial save. */
+      if (cardIds) await saveCardOrder(cardIds)
+      if (homeIds) {
+        await saveHomeOrder(homeIds)
+        setSavedHomeOrder(homeIds)
+      }
+      /* Re-fetch so what is on screen is what the database now holds, rather
+         than a local guess that happens to agree. */
+      setPendingOrder(null)
+        setPendingHomeOrder(null)
+      setReloadCount((n) => n + 1)
+      setOrderStatus({ kind: 'ok', text: 'Positions saved.' })
+    } catch (error) {
+      setOrderStatus({ kind: 'error', text: error.message || 'Could not save positions.' })
+    } finally {
+      setIsSavingOrder(false)
+    }
+  }
+
+  /* Returns THIS child to the default order. Removes no cards. */
+  async function handleResetPositions() {
+    setIsSavingOrder(true)
+    setOrderStatus(null)
+    try {
+      /* Cards AND folders: Reset restores the whole arrangement to its
+         defaults. Neither call deletes anything -- only `order` moves. */
+      await resetCardOrder()
+      await resetFolderOrder()
+      /* Dropping the mixed layout is what returns the home screen to the
+         default arrangement; the two calls above restore each collection's
+         own order underneath it. */
+      await resetHomeOrder()
+      setSavedHomeOrder([])
+      setPendingOrder(null)
+        setPendingHomeOrder(null)
+      setReloadCount((n) => n + 1)
+      setOrderStatus({ kind: 'ok', text: 'Positions reset.' })
+    } catch (error) {
+      setOrderStatus({ kind: 'error', text: error.message || 'Could not reset positions.' })
+    } finally {
+      setIsSavingOrder(false)
+    }
+  }
+
+  /*
+   * One draggable FOLDER TILE. Markup unchanged -- lifted out of the home grid
+   * so the merged list can emit cards and folders from one map.
+   */
+  function renderHomeFolder(category) {
+    return (
+          <div
+            key={category.id}
+            className={[
+              'cmove',
+              'cmove--folder',
+              isMovable ? 'cmove--on' : '',
+              draggingId === category.folderId ? 'cmove--dragging' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            /*
+             * Folder tiles become draggable under the SAME pointer path the
+             * cards use -- one implementation, so touch, mouse and stylus all
+             * behave identically and there is no second drag UX to maintain.
+             *
+             * The handlers are only bound while rearranging. With Card
+             * Flexibility off this is an inert wrapper, so tapping a folder
+             * opens it exactly as it always has.
+             */
+            onPointerDown={
+              isMovable
+                ? (event) => {
+                    event.preventDefault()
+                    event.currentTarget.setPointerCapture?.(event.pointerId)
+                    beginDrag(event, { id: category.folderId }, HOME_CATEGORY_KEY, 'folder')
+                  }
+                : undefined
+            }
+            onPointerMove={isMovable ? continueDrag : undefined}
+            onPointerUp={
+              isMovable
+                ? () => {
+                    endDrag()
+                    setDraggingId(null)
+                  }
+                : undefined
+            }
+            onPointerCancel={
+              isMovable
+                ? () => {
+                    endDrag()
+                    setDraggingId(null)
+                  }
+                : undefined
+            }
+            data-folder-id={category.folderId}
+          >
+          <button
+            type="button"
+            /*
+             * A folder is now the SAME shape as a word card -- no protruding
+             * tab -- so the grid is one even run of cards. It is still
+             * announced as a folder, which is what tells a screen reader the
+             * difference now that the shape no longer does.
+             */
+            className="ccard ccard--tinted cfolder"
+            key={category.id}
+            /*
+             * The colours come from the PALETTE, looked up by the folder's
+             * colorKey -- not from the database. cardData.js still owns what
+             * "food" looks like, which is why the folders are painted exactly
+             * as they were before this change.
+             */
+            style={{
+              '--tint': categoryColors(category.id)?.tint,
+              '--deep': categoryColors(category.id)?.deep,
+            }}
+            onClick={() => {
+              /*
+               * While rearranging, a press MOVES the folder rather than
+               * opening it -- otherwise every drag would also navigate away
+               * from the board the caregiver is arranging. Tapping opens the
+               * folder normally the moment Card Flexibility is off.
+               */
+              if (isMovable) return
+              /*
+               * The folder's own displayed name -- the same string shown on
+               * the tile below, so what the child hears is exactly what they
+               * see. "Actions" says "Actions"; a renamed folder says its new
+               * name with no list to keep in step.
+               */
+              speakControlThen(category.label, () => openFolder(category.id))
+            }}
+            aria-label={`Open ${category.label} folder`}
+          >
+            {/*
+              A folder shows its PICTURE when it has one, and falls back to
+              its emoji when it does not.
+
+              The image branch was missing entirely, which is why a folder
+              created with a picture still showed only an emoji: the url was
+              fetched, carried through boardApi and origin-corrected for
+              display, and then never rendered.
+
+              The same two classes as a word card, so a folder with a picture
+              is laid out exactly like the cards inside it -- fixed square
+              area, object-fit: contain, no stretching.
+            */}
+            {/*
+              The folder's cover, in priority order (see folderCovers.js):
+                1. the caregiver's own image, if they customised this folder
+                2. the built-in cover shipped with the app
+                3. the emoji, if neither exists
+              Identical markup either way, so the tile keeps the same fixed
+              square area, object-fit and dimensions as every other card.
+            */}
+            {folderCoverUrl(category) ? (
+              <span className="ccard__imagebox">
+                <img
+                  className="ccard__image"
+                  src={folderCoverUrl(category)}
+                  alt=""
+                  draggable="false"
+                />
+              </span>
+            ) : (
+              <span className="ccard__imagebox ccard__imagebox--emoji">
+                <span className="ccard__emoji" aria-hidden="true">
+                  {category.emoji}
+                </span>
+              </span>
+            )}
+            <span className="ccard__label">{category.label}</span>
+          </button>
+          </div>
+    )
+  }
+
+  /*
+   * One draggable card, used by BOTH grids.
+   *
+   * It was previously written inline in the folder branch only, which is why
+   * Card Flexibility appeared not to work: the HOME board -- the first screen
+   * a caregiver sees -- rendered its cards with no wrapper and no pointer
+   * handlers at all, so turning the setting on changed nothing there.
+   *
+   * `categoryKey` names the list this card belongs to, so a drag can only
+   * ever reorder within its own set. That is what keeps the home board's core
+   * words and each folder's cards as separate arrangements.
+   */
+  function renderDraggableCard(card, categoryKey, isCore = false) {
+    return (
+      <div
+        key={card.id}
+        className={[
+          'cmove',
+          'cmove--card',
+          isMovable ? 'cmove--on' : '',
+          draggingId === card.id ? 'cmove--dragging' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        /*
+         * ONE POINTER PATH FOR MOUSE AND TOUCH.
+         *
+         * Pointer events cover mouse, touch and stylus with the same
+         * handlers, so there is no second code path to keep in step, and
+         * nothing here is HTML5 drag-and-drop (which does not work on touch).
+         * setPointerCapture is what lets the drag keep tracking once the
+         * finger leaves the card it started on.
+         *
+         * Only bound while rearranging. With Card Flexibility off these are
+         * undefined, so a tap reaches the card exactly as it always has and
+         * nothing about speaking a word changes.
+         */
+        onPointerDown={
+          isMovable
+            ? (event) => {
+                event.preventDefault()
+                event.currentTarget.setPointerCapture?.(event.pointerId)
+                beginDrag(event, card, categoryKey)
+              }
+            : undefined
+        }
+        onPointerMove={isMovable ? continueDrag : undefined}
+        onPointerUp={
+          isMovable
+            ? () => {
+                /* Nothing to commit: the order was rearranged live on every
+                   move, which is why no position has to be confirmed. */
+                endDrag()
+                setDraggingId(null)
+              }
+            : undefined
+        }
+        onPointerCancel={
+          isMovable
+            ? () => {
+                endDrag()
+                setDraggingId(null)
+              }
+            : undefined
+        }
+        data-card-id={card.id}
+      >
+        <CommunicationCard
+          card={card}
+          isCore={isCore}
+          /* While rearranging, a press moves the card rather than speaking
+             it -- otherwise every drag would also say a word the caregiver
+             did not mean to say. */
+          onSelect={isMovable ? () => {} : handleSelectCard}
+          animate={isMovable ? false : animateCards}
+        />
+      </div>
+    )
+  }
+
+  /*
+   * Which arrangement the caregiver is currently looking at: a folder when one
+   * is open, otherwise the home board's core words. Save Positions and Reset
+   * both act on this, so the button always refers to what is on screen.
+   */
+  const activeCategoryKey = openCategory || HOME_CATEGORY_KEY
+
   const gridPositionClass =
     cardPositionId && cardPositionId !== 'normal' ? `cboard__grid--${cardPositionId}` : ''
 
@@ -871,20 +1729,20 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     }
 
     if (openCategory) {
-      const cardsHere = board.cardsByCategory.get(openCategory) || []
+      const rawCards = board.cardsByCategory.get(openCategory) || []
+      const cardsHere = orderedCards(openCategory, rawCards)
       return (
         <div
-          className={['cboard__grid', gridPositionClass].filter(Boolean).join(' ')}
+          className={[
+            'cboard__grid',
+            gridPositionClass,
+            isMovable ? 'cboard__grid--movable' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
           style={gridStyleFor(cardsHere.length)}
         >
-          {cardsHere.map((card) => (
-            <CommunicationCard
-              key={card.id}
-              card={card}
-              onSelect={handleSelectCard}
-              animate={animateCards}
-            />
-          ))}
+          {cardsHere.map((card) => renderDraggableCard(card, openCategory))}
         </div>
       )
     }
@@ -901,88 +1759,22 @@ function CommunicationBoard({ childProfile, onLogOut }) {
         className={['cboard__grid', gridPositionClass].filter(Boolean).join(' ')}
         style={gridStyleFor(board.basicWords.length + board.categories.length)}
       >
-        {board.basicWords.map((card) => (
-          <CommunicationCard
-            key={card.id}
-            card={card}
-            onSelect={handleSelectCard}
-            isCore
-            animate={animateCards}
-          />
-        ))}
+        {/*
+          THE HOME SCREEN IS ONE ORDERED LIST.
 
-        {board.categories.map((category) => (
-          <button
-            type="button"
-            /*
-             * A folder is now the SAME shape as a word card -- no protruding
-             * tab -- so the grid is one even run of cards. It is still
-             * announced as a folder, which is what tells a screen reader the
-             * difference now that the shape no longer does.
-             */
-            className="ccard ccard--tinted cfolder"
-            key={category.id}
-            /*
-             * The colours come from the PALETTE, looked up by the folder's
-             * colorKey -- not from the database. cardData.js still owns what
-             * "food" looks like, which is why the folders are painted exactly
-             * as they were before this change.
-             */
-            style={{
-              '--tint': categoryColors(category.id)?.tint,
-              '--deep': categoryColors(category.id)?.deep,
-            }}
-            onClick={() => {
-              /*
-               * The folder's own displayed name -- the same string shown on
-               * the tile below, so what the child hears is exactly what they
-               * see. "Actions" says "Actions"; a renamed folder says its new
-               * name with no list to keep in step.
-               */
-              speakControlThen(category.label, () => openFolder(category.id))
-            }}
-            aria-label={`Open ${category.label} folder`}
-          >
-            {/*
-              A folder shows its PICTURE when it has one, and falls back to
-              its emoji when it does not.
+          Cards and folders are still separate MongoDB entities -- nothing is
+          converted -- but they render from a single sequence so a folder can
+          sit between two cards. Two separate .map() calls could never do that:
+          whatever their internal order, every card was emitted before every
+          folder.
 
-              The image branch was missing entirely, which is why a folder
-              created with a picture still showed only an emoji: the url was
-              fetched, carried through boardApi and origin-corrected for
-              display, and then never rendered.
-
-              The same two classes as a word card, so a folder with a picture
-              is laid out exactly like the cards inside it -- fixed square
-              area, object-fit: contain, no stretching.
-            */}
-            {/*
-              The folder's cover, in priority order (see folderCovers.js):
-                1. the caregiver's own image, if they customised this folder
-                2. the built-in cover shipped with the app
-                3. the emoji, if neither exists
-              Identical markup either way, so the tile keeps the same fixed
-              square area, object-fit and dimensions as every other card.
-            */}
-            {folderCoverUrl(category) ? (
-              <span className="ccard__imagebox">
-                <img
-                  className="ccard__image"
-                  src={folderCoverUrl(category)}
-                  alt=""
-                  draggable="false"
-                />
-              </span>
-            ) : (
-              <span className="ccard__imagebox ccard__imagebox--emoji">
-                <span className="ccard__emoji" aria-hidden="true">
-                  {category.emoji}
-                </span>
-              </span>
-            )}
-            <span className="ccard__label">{category.label}</span>
-          </button>
-        ))}
+          Inside a FOLDER the card-only rendering is unchanged.
+        */}
+        {homeItems().map((item) =>
+          item.type === 'card'
+            ? renderDraggableCard(item.card, HOME_CATEGORY_KEY, true)
+            : renderHomeFolder(item.category),
+        )}
       </div>
     )
   }
@@ -1064,6 +1856,58 @@ function CommunicationBoard({ childProfile, onLogOut }) {
               .join(' ')}
             ref={cardAreaRef}
           >
+            {/*
+              The save bar. Shown only while rearranging, and only inside a
+              folder -- which is where dragging is offered, so it never
+              appears somewhere it could not act.
+            */}
+            {isMovable && (
+              <div className="cmovebar">
+                <span className="cmovebar__hint">
+                  {pendingOrder?.get(activeCategoryKey)
+                    ? 'Drag cards to rearrange, then save.'
+                    : 'Drag a card onto another to change the order.'}
+                </span>
+
+                {orderStatus && (
+                  <span
+                    className={[
+                      'cmovebar__status',
+                      orderStatus.kind === 'error' ? 'cmovebar__status--error' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    role="status"
+                  >
+                    {orderStatus.text}
+                  </span>
+                )}
+
+                <button
+                  type="button"
+                  className="cmovebar__btn"
+                  onClick={handleSavePositions}
+                  /* Nothing to save until something has actually moved. */
+                  disabled={
+                    isSavingOrder ||
+                    (!pendingOrder?.get(activeCategoryKey) &&
+                      !(!openCategory && pendingHomeOrder))
+                  }
+                >
+                  {isSavingOrder ? 'Saving…' : 'Save Positions'}
+                </button>
+
+                <button
+                  type="button"
+                  className="cmovebar__btn cmovebar__btn--reset"
+                  onClick={handleResetPositions}
+                  disabled={isSavingOrder}
+                >
+                  Reset Card Positions
+                </button>
+              </div>
+            )}
+
             {renderCardArea()}
           </div>
         </div>
@@ -1184,6 +2028,27 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           onSelectCardPosition={(id) => {
             setCardPositionId(id)
             saveCardPosition(id)
+          }}
+          cardFlexibility={cardFlexibilityId}
+          /*
+           * Applies at once and is written to the child's profile, so it
+           * survives a refresh, a logout, and a move to another device.
+           * The local mirror is updated too, so the next first paint is
+           * already correct.
+           *
+           * A failed save is reported rather than swallowed: silently keeping
+           * a setting that did not persist would mislead the caregiver into
+           * thinking it had.
+           */
+          onSelectCardFlexibility={(id) => {
+            setCardFlexibilityId(id)
+            saveCardFlexibility(id, profileId)
+            saveChildSettings({ cardFlexibility: id === 'on' }).catch((error) => {
+              setOrderStatus({
+                kind: 'error',
+                text: error.message || 'Could not save Card Flexibility.',
+              })
+            })
           }}
           navPosition={navPositionId}
           /*

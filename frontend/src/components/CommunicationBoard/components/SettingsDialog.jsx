@@ -10,6 +10,8 @@ import {
   getVoice,
   CARD_POSITIONS,
   getCardPosition,
+  CARD_FLEXIBILITY,
+  getCardFlexibility,
   NAV_POSITIONS,
   getNavPosition,
   ANIMATIONS,
@@ -60,6 +62,8 @@ function SettingsDialog({
   onSelectVoice,
   cardPosition,
   onSelectCardPosition,
+  cardFlexibility,
+  onSelectCardFlexibility,
   navPosition,
   onSelectNavPosition,
   animation,
@@ -202,6 +206,20 @@ function SettingsDialog({
      * the screen is this, so the child can reach it", and a caregiver setting
      * one usually wants the other.
      */
+    /*
+     * Movability -- whether cards can be dragged into a new order. A
+     * caregiver tool, so it sits with the other layout settings; the
+     * arrangement it produces is saved from the board itself, where the
+     * caregiver can see what they are saving.
+     */
+    {
+      id: 'cardFlexibility',
+      title: 'Card Flexibility',
+      options: CARD_FLEXIBILITY,
+      selected: cardFlexibility,
+      current: getCardFlexibility(cardFlexibility),
+      onSelect: onSelectCardFlexibility,
+    },
     {
       id: 'navPosition',
       title: 'Navigation Position',
