@@ -19,6 +19,8 @@ import {
   saveVoice,
   loadCardPosition,
   saveCardPosition,
+  loadNavPosition,
+  saveNavPosition,
   loadAnimation,
   saveAnimation,
   hasAnimationChoice,
@@ -173,6 +175,17 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * full-width layout, so an untouched install looks exactly as it did.
    */
   const [cardPositionId, setCardPositionId] = useState(loadCardPosition)
+
+  /*
+   * Which side the navigation rail sits on. 'right' is the default and the
+   * original layout, so an untouched install is unchanged.
+   *
+   * This moves the RAIL, not a mirrored copy of it: the class below flips the
+   * flex row so the two items genuinely swap. Card Position needs no
+   * awareness of it -- the grid centres inside whatever width the card area
+   * ends up with, which layout recomputes on the new side.
+   */
+  const [navPositionId, setNavPositionId] = useState(loadNavPosition)
 
   /*
    * Whether tapping a card plays the "come forward" animation. On by default;
@@ -1004,7 +1017,14 @@ function CommunicationBoard({ childProfile, onLogOut }) {
         isSpeaking={isSpeaking}
       />
 
-      <div className="cboard__lower">
+      <div
+        className={[
+          'cboard__lower',
+          navPositionId === 'left' ? 'cboard__lower--navleft' : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
         <div className="cboard__main">
           {/*
             The scrolling region. Only this area scrolls -- the sentence bar
@@ -1164,6 +1184,16 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           onSelectCardPosition={(id) => {
             setCardPositionId(id)
             saveCardPosition(id)
+          }}
+          navPosition={navPositionId}
+          /*
+           * Applies immediately: the class changes, the flex row reverses and
+           * the card area is re-laid-out on the other side, all within the
+           * same render. Saved at the same moment so it survives a refresh.
+           */
+          onSelectNavPosition={(id) => {
+            setNavPositionId(id)
+            saveNavPosition(id)
           }}
           animation={animationId}
           /*

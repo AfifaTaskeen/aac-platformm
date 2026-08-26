@@ -10,6 +10,8 @@ import {
   getVoice,
   CARD_POSITIONS,
   getCardPosition,
+  NAV_POSITIONS,
+  getNavPosition,
   ANIMATIONS,
   getAnimation,
 } from '../boardSettings'
@@ -58,6 +60,8 @@ function SettingsDialog({
   onSelectVoice,
   cardPosition,
   onSelectCardPosition,
+  navPosition,
+  onSelectNavPosition,
   animation,
   onSelectAnimation,
   onEditWords,
@@ -193,6 +197,19 @@ function SettingsDialog({
      * the other display settings because that is all it changes: what the
      * board LOOKS like when a card is chosen, never what choosing one does.
      */
+    /*
+     * Navigation Position sits next to Card Position: both answer "where on
+     * the screen is this, so the child can reach it", and a caregiver setting
+     * one usually wants the other.
+     */
+    {
+      id: 'navPosition',
+      title: 'Navigation Position',
+      options: NAV_POSITIONS,
+      selected: navPosition,
+      current: getNavPosition(navPosition),
+      onSelect: onSelectNavPosition,
+    },
     {
       id: 'animation',
       title: 'Animation',

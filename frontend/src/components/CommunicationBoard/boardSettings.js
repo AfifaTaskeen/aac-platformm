@@ -461,3 +461,65 @@ export function shouldAnimateCards(animationId, hasExplicitChoice) {
   if (prefersReducedMotion() && !hasExplicitChoice) return false
   return true
 }
+
+/* -------------------------------------------------------------------------
+   NAVIGATION POSITION
+
+   Which side of the board the navigation rail -- Keyboard, Core Words, Up,
+   Down, Alert, Settings -- sits on.
+
+   It exists for the same reason Card Position does: reach. A child who uses
+   their left hand, or whose chair puts the tablet off to one side, may not be
+   able to reach controls pinned to the right. Moving the whole rail is the
+   difference between operating the board independently and needing someone
+   else to press Settings or Core Words.
+
+   This moves the RAIL ITSELF, not a mirrored copy of the buttons. The board
+   and the rail are siblings in a flex row, so reversing that row genuinely
+   swaps them and the board's available width is recomputed by layout -- which
+   is what makes Card Position keep working: Center still means "centred in
+   whatever space is left beside the rail", wherever the rail now is.
+
+   Right is the default, so an untouched install is unchanged.
+   ------------------------------------------------------------------------- */
+export const NAV_POSITIONS = [
+  {
+    id: 'right',
+    label: 'Right',
+    description: 'Buttons on the right side',
+  },
+  {
+    id: 'left',
+    label: 'Left',
+    description: 'Buttons on the left side',
+  },
+]
+
+export const DEFAULT_NAV_POSITION = 'right'
+
+const NAV_POSITION_STORAGE_KEY = 'buddytalk.navPosition'
+
+export function getNavPosition(id) {
+  return (
+    NAV_POSITIONS.find((p) => p.id === id) ||
+    NAV_POSITIONS.find((p) => p.id === DEFAULT_NAV_POSITION)
+  )
+}
+
+export function loadNavPosition() {
+  try {
+    const saved = window.localStorage.getItem(NAV_POSITION_STORAGE_KEY)
+    if (saved && NAV_POSITIONS.some((p) => p.id === saved)) return saved
+  } catch {
+    // Storage unavailable -- fall through to the default.
+  }
+  return DEFAULT_NAV_POSITION
+}
+
+export function saveNavPosition(id) {
+  try {
+    window.localStorage.setItem(NAV_POSITION_STORAGE_KEY, id)
+  } catch {
+    // Saving failed; the choice still applies for this session.
+  }
+}

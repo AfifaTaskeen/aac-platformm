@@ -80,6 +80,30 @@
   gap: clamp(6px, 0.8vw, 10px);
 }
 
+/* --------------------------------------------------------------------------
+   NAVIGATION POSITION
+
+   Which side the rail sits on. `row-reverse` genuinely swaps the two flex
+   ITEMS -- the card area and the rail -- rather than mirroring their contents,
+   so the board's available width is recomputed by layout on the new side.
+
+   That is what keeps Card Position correct for free: the grid is centred with
+   `margin-inline: auto` inside .cboard__cards, which lives inside
+   .cboard__main, which is now simply narrower on the other side. "Centre"
+   therefore means "centred in the space left beside the rail" wherever the
+   rail is, with no second calculation and no JavaScript.
+
+   Deliberately NOT applied below 700px: there .cboard__lower is a COLUMN and
+   the rail is a full-width strip under the cards, where left and right have
+   no meaning. The media query at the bottom of this file resets it.
+
+   The default (rail on the right) needs no rule -- it is the natural order of
+   the markup, so an untouched install is byte-identical to before.
+   -------------------------------------------------------------------------- */
+.cboard__lower--navleft {
+  flex-direction: row-reverse;
+}
+
 .cboard__main {
   flex: 1;
   min-width: 0;
@@ -419,6 +443,31 @@
   --pop-room: clamp(70px, 12vw, 180px);
   padding-inline: var(--pop-room);
   margin-inline: calc(var(--pop-room) * -1);
+}
+
+/*
+   THE OVERHANG MUST NOT SWALLOW CLICKS.
+
+   The negative margin above makes this box extend --pop-room (up to 180px)
+   PAST its own edges on both sides. That space is empty, but it is still part
+   of this element, so it sits on top of whatever is beside it and receives
+   the clicks meant for it.
+
+   With the rail on the right that was harmless -- the overhang fell into the
+   gap. With Navigation Position set to Left the rail is now underneath it,
+   and every button on it (Settings, Core Words, Alert...) became unclickable:
+   elementFromPoint over the Settings button returned .cboard__cards.
+
+   Making the padding transparent to pointers fixes it without changing one
+   pixel of layout. The cards themselves re-enable pointer events, so nothing
+   about tapping a card changes -- only the empty margin stops intercepting.
+*/
+.cboard__cards {
+  pointer-events: none;
+}
+
+.cboard__cards > * {
+  pointer-events: auto;
 }
 
 /* --------------------------------------------------------------------------
@@ -1688,6 +1737,16 @@
      horizontal strip within thumb reach. The sentence bar still spans the
      full width above both. */
   .cboard__lower {
+    flex-direction: column;
+  }
+
+  /*
+     Navigation Position does not apply here. The rail is a full-width strip
+     BELOW the cards at this size, so "left" and "right" describe nothing --
+     row-reverse would only move it ABOVE the cards, pushing the board down
+     and putting the controls where the sentence bar already is.
+  */
+  .cboard__lower--navleft {
     flex-direction: column;
   }
 
