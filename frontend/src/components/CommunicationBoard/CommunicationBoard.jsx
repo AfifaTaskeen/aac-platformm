@@ -17,6 +17,8 @@ import {
   applyTheme,
   loadVoice,
   saveVoice,
+  loadCardPosition,
+  saveCardPosition,
 } from './boardSettings'
 import { fetchBoard } from './boardApi'
 /*
@@ -70,7 +72,7 @@ const CORE_WORDS_KEY = 'core'
  */
 const EMERGENCY_KEY = 'emergency'
 
-function CommunicationBoard({ childProfile }) {
+function CommunicationBoard({ childProfile, onLogOut }) {
   /*
    * The sentence being built: an array of card objects, in tap order.
    * Objects rather than strings, so a repeated word is still a distinct
@@ -162,6 +164,12 @@ function CommunicationBoard({ childProfile }) {
    */
   const [voiceId, setVoiceId] = useState(loadVoice)
 
+  /*
+   * Where the card grid sits horizontally. 'normal' keeps the pre-existing
+   * full-width layout, so an untouched install looks exactly as it did.
+   */
+  const [cardPositionId, setCardPositionId] = useState(loadCardPosition)
+
   useEffect(() => {
     applyTheme(themeId)
   }, [themeId])
@@ -174,6 +182,21 @@ function CommunicationBoard({ childProfile }) {
 
   /* The scrolling card area, moved by the Up/Down buttons. */
   const cardAreaRef = useRef(null)
+
+  /*
+   * The card area's usable width in pixels, kept live so Card Position can
+   * decide whether a positioned grid would leave any free space at all.
+   *
+   * Measured rather than expressed as a CSS calc(): the usable width depends
+   * on --pop-room, a clamp() tied to the viewport, and a percentage used in
+   * max-inline-size on the grid itself would resolve against that element's
+   * own capped width and never converge.
+   */
+  const [cardAreaWidth, setCardAreaWidth] = useState(null)
+
+  /* The grid's column gap in pixels (--cgap is a clamp(), so it has to be
+     read from computed style rather than assumed). */
+  const [cardAreaGap, setCardAreaGap] = useState(null)
 
   /*
    * Identifies the most recent control label, so its cleanup timer only ever
@@ -318,11 +341,71 @@ function CommunicationBoard({ childProfile }) {
    * and the row arithmetic can never disagree -- they are computed from the
    * same number.
    */
+  /*
+   * The Card Position class for the grid, or '' for Normal.
+   *
+   * Normal deliberately adds NO class, so the grid keeps exactly the layout
+   * it had before this setting existed.
+   */
+  const gridPositionClass =
+    cardPositionId && cardPositionId !== 'normal' ? `cboard__grid--${cardPositionId}` : ''
+
+  /*
+   * THE WIDTH THE GRID NATURALLY WANTS, for Card Position.
+   *
+   * A card's PREFERRED width is --colw, the per-grid-size figure the board
+   * already uses as the column minimum. At Normal the columns are 1fr and
+   * stretch past it to fill the area; the natural width is what they would
+   * take if they did not stretch:
+   *
+   *     cols * preferred + (cols - 1) * gap
+   *
+   * Free space is whatever the card area has beyond that. When the columns
+   * are ALREADY narrower than preferred -- a phone in landscape, or a high
+   * column count from Very Small -- there is no free space and the cap is
+   * simply not applied, so the layout stays exactly as Normal rather than
+   * shrinking cards to manufacture movement.
+   *
+   * The preferred width is scaled by the Grid Size setting so all four sizes
+   * compose: Very Small asks for narrower cards than Large, and each keeps
+   * its own natural width rather than every size sharing one fixed figure.
+   */
+  const GRID_SIZE_WIDTH_SCALE = { verysmall: 0.7, small: 0.85, medium: 1, large: 1.15 }
+
+  function naturalGridWidth() {
+    const cols = effectiveColumns()
+    const gap = cardAreaGap != null ? cardAreaGap : 10
+    const scale = GRID_SIZE_WIDTH_SCALE[gridSizeId] ?? 1
+    const preferred = parseFloat(minCardWidth) * scale
+    return cols * preferred + (cols - 1) * gap
+  }
+
+  /*
+   * Card Position only applies when it would leave a visible amount of free
+   * space -- at least a quarter of a card, so a one- or two-pixel remainder
+   * never counts as "movement". Below that the grid keeps the Normal layout.
+   */
+  const positionedGridWidth = (() => {
+    if (!gridPositionClass || cardAreaWidth == null) return null
+    const natural = naturalGridWidth()
+    const free = cardAreaWidth - natural
+    const meaningful = parseFloat(minCardWidth) * 0.25
+    return free >= meaningful ? natural : null
+  })()
+
   function gridStyleFor(cardCount) {
     return {
       '--colw': minCardWidth,
       '--cols': effectiveColumns(),
       '--rows': rowsFor(cardCount),
+      /*
+       * Only set when there is genuinely room to move into; otherwise the
+       * grid keeps its full-width Normal behaviour and the CSS cap has no
+       * value to apply.
+       */
+      ...(positionedGridWidth != null
+        ? { '--grid-natural-width': `${Math.round(positionedGridWidth)}px` }
+        : {}),
     }
   }
 
@@ -519,6 +602,47 @@ function CommunicationBoard({ childProfile }) {
     updateScrollState()
   }, [openCategory, isKeyboardOpen, updateScrollState])
 
+  /*
+   * Measures the card area's usable width, so Card Position can work out how
+   * much free space a positioned grid would actually leave.
+   *
+   * Read from the CARD AREA (one level above the grid) rather than the grid
+   * itself: a percentage used in max-inline-size on the same element resolves
+   * against that element's own capped width and never converges, which is why
+   * this is measured here instead of expressed as a CSS calc().
+   *
+   * A ResizeObserver, not the window resize listener boardWidth already uses:
+   * this width changes with the RAIL and the padding, not only the window.
+   */
+  useEffect(() => {
+    const el = cardAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+
+    function measure() {
+      const areaStyle = window.getComputedStyle(el)
+      const pop = parseFloat(areaStyle.getPropertyValue('--pop-room')) || 0
+      /*
+       * clientWidth still includes --pop-room: the padding that creates it is
+       * cancelled by an equal negative margin (see .cboard__cards), so it has
+       * to be subtracted explicitly to get the width the grid really occupies.
+       */
+      const usable = el.clientWidth - pop * 2
+      if (usable > 0) setCardAreaWidth(Math.round(usable * 100) / 100)
+
+      const grid = el.querySelector('.cboard__grid')
+      if (grid) {
+        const gap = parseFloat(window.getComputedStyle(grid).columnGap)
+        if (!Number.isNaN(gap)) setCardAreaGap(gap)
+      }
+    }
+
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+
+    return () => observer.disconnect()
+  }, [openCategory, isKeyboardOpen])
+
   useEffect(() => {
     const el = cardAreaRef.current
     if (!el) return
@@ -673,7 +797,10 @@ function CommunicationBoard({ childProfile }) {
     if (openCategory) {
       const cardsHere = board.cardsByCategory.get(openCategory) || []
       return (
-        <div className="cboard__grid" style={gridStyleFor(cardsHere.length)}>
+        <div
+          className={['cboard__grid', gridPositionClass].filter(Boolean).join(' ')}
+          style={gridStyleFor(cardsHere.length)}
+        >
           {cardsHere.map((card) => (
             <CommunicationCard
               key={card.id}
@@ -694,7 +821,7 @@ function CommunicationBoard({ childProfile }) {
      */
     return (
       <div
-        className="cboard__grid"
+        className={['cboard__grid', gridPositionClass].filter(Boolean).join(' ')}
         style={gridStyleFor(board.basicWords.length + board.categories.length)}
       >
         {board.basicWords.map((card) => (
@@ -957,12 +1084,19 @@ function CommunicationBoard({ childProfile }) {
             setVoiceId(id)
             saveVoice(id)
           }}
+          cardPosition={cardPositionId}
+          onSelectCardPosition={(id) => {
+            setCardPositionId(id)
+            saveCardPosition(id)
+          }}
           /* Settings closes as Edit Words opens, so only one panel is ever
              on screen. */
           onEditWords={() => {
             setIsSettingsOpen(false)
             setIsEditOpen(true)
           }}
+          /* Passed straight through from App, which owns the session. */
+          onLogOut={onLogOut}
           onClose={() => setIsSettingsOpen(false)}
         />
       )}

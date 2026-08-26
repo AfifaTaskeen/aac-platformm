@@ -85,6 +85,21 @@ function App() {
   const [childProfile, setChildProfile] = useState(null)
 
   /*
+   * Set when the profile check could not be completed -- the database is
+   * unreachable, or the backend is down.
+   *
+   * This is deliberately NOT the same as "no profile yet". Treating a failed
+   * check as "no profile" is what would send an existing family back to the
+   * setup form to re-type details they had already saved. When this is set
+   * the app says so and offers a retry, and the session is left untouched.
+   */
+  const [profileError, setProfileError] = useState(null)
+
+  /* Bumped by "Try again" to re-run the profile check without touching the
+     session or reloading the page. */
+  const [profileCheckCount, setProfileCheckCount] = useState(0)
+
+  /*
    * SESSION RESTORE -- runs once, before anything is shown.
    *
    * Asks the backend "who am I?", which is the only way to find out: the
@@ -157,6 +172,7 @@ function App() {
 
     let cancelled = false
     setStage('checking')
+    setProfileError(null)
 
     async function loadChildProfile() {
       try {
@@ -167,9 +183,34 @@ function App() {
 
         if (cancelled) return
 
+        /*
+         * EACH FAILURE MEANS SOMETHING DIFFERENT.
+         *
+         * This used to be a single `if (!response.ok) setStage('profile')`,
+         * which sent EVERY failure to the setup form -- so a database outage
+         * asked an existing family to re-enter a profile they had already
+         * saved, and an expired session silently showed the setup form
+         * instead of asking them to sign in.
+         */
+        if (response.status === 401) {
+          /* The session really is gone. Drop back to sign-in. */
+          setUser(null)
+          return
+        }
+
         if (!response.ok) {
-          // Not signed in, or the request failed -- setup is the safe landing.
-          setStage('profile')
+          /*
+           * 503 (database down), 500, or anything else: the check could not
+           * be completed. We do NOT know whether a profile exists, so we
+           * must not guess -- guessing "no profile" is the harmful direction.
+           * The session stays valid and the user is offered a retry.
+           */
+          const data = await response.json().catch(() => null)
+          setProfileError(
+            data?.message ||
+              'Could not reach the server. Please check your connection and try again.',
+          )
+          setStage('error')
           return
         }
 
@@ -180,13 +221,16 @@ function App() {
           setChildProfile(data.profile)
           setStage('board')
         } else {
+          /* A genuine 200 saying this user has no profile yet. */
           setChildProfile(null)
           setStage('profile')
         }
       } catch (error) {
         if (cancelled) return
+        /* Network failure -- again, not evidence that a profile is missing. */
         console.log('Could not load the child profile:', error)
-        setStage('profile')
+        setProfileError('Could not reach the server. Please try again.')
+        setStage('error')
       }
     }
 
@@ -196,7 +240,37 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [user])
+  }, [user, profileCheckCount])
+
+  /*
+   * Signs out for real.
+   *
+   * The server is asked FIRST, because it owns the session: only it can clear
+   * the httpOnly cookie, which page JavaScript cannot touch. Clearing local
+   * state alone would look signed-out while the cookie stayed valid, so the
+   * next refresh would silently sign the user back in.
+   *
+   * Local state is cleared afterwards regardless of the server's answer. If
+   * the request fails the cookie may survive, but leaving someone stuck on a
+   * board they asked to leave is worse -- and the next /api/auth/me settles
+   * the truth either way.
+   */
+  async function handleLogOut() {
+    try {
+      await fetch(`${API_BASE_URL}/api/auth/logout`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+    } catch (error) {
+      console.log('Sign-out request failed:', error)
+    }
+
+    setUser(null)
+    setChildProfile(null)
+    setProfileError(null)
+    setStage('checking')
+    setAuthView('account')
+  }
 
   /*
    * Returns to Sign in and tidies the address bar, so a used reset link is not
@@ -259,6 +333,26 @@ function App() {
       )
     }
 
+    /*
+     * The profile check could not be completed -- almost always the database
+     * being briefly unavailable.
+     *
+     * The user stays SIGNED IN: the cookie is untouched, and Try again simply
+     * re-runs the check. Showing the setup form here instead would ask an
+     * existing family to re-enter a profile they already have, and showing
+     * the sign-in screen would claim a session had ended when it had not.
+     */
+    if (stage === 'error') {
+      return (
+        <div className="app-placeholder">
+          <p>{profileError}</p>
+          <button type="button" onClick={() => setProfileCheckCount((n) => n + 1)}>
+            Try again
+          </button>
+        </div>
+      )
+    }
+
     if (stage === 'profile') {
       return (
         <ChildProfileScreen
@@ -276,7 +370,7 @@ function App() {
      * profile -- the caregiver's choices in Child Profile are what shape it,
      * so the board never asks again and never writes back.
      */
-    return <CommunicationBoard childProfile={childProfile} />
+    return <CommunicationBoard childProfile={childProfile} onLogOut={handleLogOut} />
   }
 
   /* Step 2 of a password reset, reached from the emailed link. */

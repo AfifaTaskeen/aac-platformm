@@ -180,8 +180,41 @@ function ChildProfileScreen({ existingProfile = null, onSaved }) {
         return
       }
 
+      /*
+       * EACH FAILURE SAYS WHAT ACTUALLY WENT WRONG.
+       *
+       * Only a real 401 means the session is gone. Everything else used to
+       * fall through to a generic message, and a database outage in
+       * particular arrived here as 401 -- so a caregiver whose session was
+       * perfectly valid was told to sign in again, losing the details they
+       * had just typed. The backend now distinguishes these, and so does this.
+       */
       if (response.status === 401) {
+        /* Genuinely signed out: the token is missing, expired or invalid. */
         setStatus('Your session has ended. Please sign in again.')
+        return
+      }
+
+      if (response.status === 403) {
+        setStatus(data?.message || 'You do not have permission to do that.')
+        return
+      }
+
+      if (response.status === 503) {
+        /*
+         * The database is unreachable. The caregiver stays on this screen
+         * with everything they typed still in the form, and simply tries
+         * again -- they are NOT signed out.
+         */
+        setStatus(
+          data?.message ||
+            "Unable to save your child's profile right now. Please try again.",
+        )
+        return
+      }
+
+      if (response.status === 409) {
+        setStatus(data?.message || 'A profile already exists for this account.')
         return
       }
 
@@ -189,6 +222,11 @@ function ChildProfileScreen({ existingProfile = null, onSaved }) {
       if (data?.field) {
         setErrors({ [data.field]: data.message })
         setTouched({ ...nextTouched, [data.field]: true })
+        return
+      }
+
+      if (response.status >= 500) {
+        setStatus(data?.message || 'The server had a problem. Please try again.')
         return
       }
 

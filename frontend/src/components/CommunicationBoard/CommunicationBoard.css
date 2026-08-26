@@ -550,6 +550,84 @@
   align-content: start;
 }
 
+/* ---------------------------------------------------------------------------
+   CARD POSITION -- where the grid sits horizontally in the card area.
+
+   Only the grid's horizontal placement changes. The column count, the card
+   size, the gaps, the row height, the ordering and the scrolling are all
+   decided elsewhere and are deliberately not touched here.
+
+   HOW THE ROOM IS MADE
+   --------------------
+   By default the columns are minmax(0, 1fr), so they stretch to fill the
+   whole card area and there is no free space to move into -- a grid that
+   already spans the container cannot be nudged left or right.
+
+   So for the three positioned modes the grid is capped at the width its
+   columns naturally want:
+
+       cols * --colw   +   (cols - 1) * gap
+
+   --colw is the same per-grid-size card width the board already uses (see
+   CARD_WIDTH_BY_GRID), and --cols is the count the existing responsive logic
+   worked out. Neither is recalculated here: this reads the values the board
+   already decided, so a 5-column phone stays 5 columns and a 4-column tablet
+   stays 4.
+
+   `max-inline-size` caps rather than sets, so on a narrow screen where the
+   columns are already tighter than --colw the cap simply never applies and
+   the layout is identical to Normal. That is what keeps phone landscape safe:
+   the grid can only ever get NARROWER than the space, never wider, so no
+   position can push a card off-screen or cause horizontal overflow.
+
+   `margin-inline` then places that capped block. auto absorbs the leftover
+   space on whichever side should be empty.
+
+   NORMAL is intentionally absent: with no class applied the grid keeps the
+   exact behaviour it had before this setting existed.
+   --------------------------------------------------------------------------- */
+.cboard__grid--left,
+.cboard__grid--center,
+.cboard__grid--right {
+  /*
+     THE GRID TAKES ITS NATURAL WIDTH; THE REMAINDER BECOMES FREE SPACE.
+
+     By default the columns are minmax(0, 1fr) and stretch to fill the card
+     area, so the grid already spans the container and there is nothing to
+     slide it into. Capping it at the width the columns actually WANT --
+
+         cols * preferred-card-width + (cols - 1) * gap
+
+     -- leaves the remainder free, and margin-inline then places the block in
+     it: all the space on the right for Left, split evenly for Center, all on
+     the left for Right.
+
+     That width is computed in CommunicationBoard.jsx, from the current Grid
+     Size, the current column count and the measured gap -- never a fixed
+     figure -- so it composes with all four Grid Sizes. It cannot be a CSS
+     calc(): a percentage in max-inline-size on this same element resolves
+     against the element's own capped width and never converges, and both
+     --cgap and --pop-room are viewport-tied clamp()s.
+
+     `max-inline-size` caps rather than sets, so the grid can only ever be
+     narrower than the space available, never wider: no position can push a
+     card off-screen or cause horizontal overflow at any viewport.
+  */
+  max-inline-size: var(--grid-natural-width, none);
+}
+
+.cboard__grid--left {
+  margin-inline: 0 auto;
+}
+
+.cboard__grid--center {
+  margin-inline: auto;
+}
+
+.cboard__grid--right {
+  margin-inline: auto 0;
+}
+
 .cboard__empty {
   margin: clamp(16px, 3vh, 32px) 0 0;
   text-align: center;
@@ -2750,4 +2828,25 @@
   .cmenu__btn--keyboard {
     min-height: 36px;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   LOG OUT — the one row in Settings that ends the session.
+
+   Separated from the rows above by a rule and a little space, and set in the
+   theme's danger colour, so a caregiver reading down the list can see it is a
+   different KIND of action before they reach it. It carries no chevron and no
+   value, because it goes nowhere and shows nothing -- it just acts.
+   --------------------------------------------------------------------------- */
+.cset__row--logout {
+  margin-block-start: clamp(8px, 1.5vh, 16px);
+  border-block-start: 2px solid var(--color-edge);
+  justify-content: center;
+}
+
+.cset__row--logout .cset__row-label {
+  /* The theme's warm-red token, so it follows light and dark like every
+     other colour in this panel rather than being a fixed literal. */
+  color: var(--color-coral-text);
+  font-weight: 700;
 }

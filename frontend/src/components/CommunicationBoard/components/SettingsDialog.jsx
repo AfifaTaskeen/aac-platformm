@@ -8,6 +8,8 @@ import {
   getTheme,
   VOICES,
   getVoice,
+  CARD_POSITIONS,
+  getCardPosition,
 } from '../boardSettings'
 
 /*
@@ -52,7 +54,10 @@ function SettingsDialog({
   onSelectTheme,
   voice,
   onSelectVoice,
+  cardPosition,
+  onSelectCardPosition,
   onEditWords,
+  onLogOut,
   onClose,
 }) {
   /*
@@ -144,6 +149,19 @@ function SettingsDialog({
       selected: textSize,
       current: getTextSize(textSize),
       onSelect: onSelectTextSize,
+    },
+    /*
+     * Card Position -- where the grid sits horizontally. Same row/option
+     * markup as every other setting, so it inherits the panel's responsive
+     * layout rather than needing rules of its own.
+     */
+    {
+      id: 'cardPosition',
+      title: 'Card Position',
+      options: CARD_POSITIONS,
+      selected: cardPosition,
+      current: getCardPosition(cardPosition),
+      onSelect: onSelectCardPosition,
     },
     /*
      * Voice sits next to the other "how the board behaves" settings and uses
@@ -308,6 +326,26 @@ function SettingsDialog({
                   </svg>
                 </button>
               ))}
+
+              {/*
+                Log Out closes the session for good. Like Edit Words it is an
+                ACTION rather than a value, so it sits outside the `settings`
+                array and shows no current value.
+
+                Last in the list, and visually separated, because it is the
+                one row here a caregiver would not want to hit by accident --
+                everything above changes how the board looks, this ends the
+                session.
+              */}
+              {onLogOut && (
+                <button
+                  type="button"
+                  className="cset__row cset__row--logout"
+                  onClick={onLogOut}
+                >
+                  <span className="cset__row-label">Log Out</span>
+                </button>
+              )}
             </div>
           )}
         </div>

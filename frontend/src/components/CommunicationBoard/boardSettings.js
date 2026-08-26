@@ -21,11 +21,23 @@
 /*
  * `shift` is added to the column count the screen would otherwise use.
  *
- *   small  +1 column  -> more, smaller cards
- *   medium  0         -> exactly today's layout, unchanged
- *   large  -1 column  -> fewer, larger cards
+ *   verysmall  +2 columns  -> the most, smallest cards
+ *   small      +1 column   -> more, smaller cards
+ *   medium      0          -> exactly today's layout, unchanged
+ *   large      -1 column   -> fewer, larger cards
+ *
+ * Very Small extends the same +1 step Small already uses -- it is not a new
+ * mechanism, just one more column added on top. effectiveColumns() in
+ * CommunicationBoard.jsx floors the result at 1, so no shift, however large,
+ * can ever produce zero or negative columns.
  */
 export const GRID_SIZES = [
+  {
+    id: 'verysmall',
+    label: 'Very Small',
+    shift: 2,
+    description: 'The most cards on screen',
+  },
   {
     id: 'small',
     label: 'Small',
@@ -258,6 +270,76 @@ export function loadVoice() {
 export function saveVoice(id) {
   try {
     window.localStorage.setItem(VOICE_STORAGE_KEY, id)
+  } catch {
+    // Saving failed; the choice still applies for this session.
+  }
+}
+
+/* -------------------------------------------------------------------------
+   CARD POSITION
+
+   Where the card grid sits HORIZONTALLY inside the card area. Nothing else:
+   the column count, the card size, the spacing and the scrolling are all
+   decided elsewhere and are untouched by this setting.
+
+   It exists because a child does not always have easy reach across a whole
+   screen. A child who uses their left hand, or whose wheelchair tray puts the
+   tablet off to one side, may only comfortably reach part of the board --
+   moving the grid to that side is the difference between reaching every card
+   and reaching some of them.
+
+   Normal is deliberately its own option rather than an alias for one of the
+   other three. It means "exactly what the board did before this setting
+   existed" -- the grid stretched across the full width -- so an existing user
+   who never opens this setting sees no change at all.
+   ------------------------------------------------------------------------- */
+export const CARD_POSITIONS = [
+  {
+    id: 'normal',
+    label: 'Normal',
+    description: 'Fills the whole width',
+  },
+  {
+    id: 'left',
+    label: 'Left',
+    description: 'Cards on the left side',
+  },
+  {
+    id: 'center',
+    label: 'Center',
+    description: 'Cards in the middle',
+  },
+  {
+    id: 'right',
+    label: 'Right',
+    description: 'Cards on the right side',
+  },
+]
+
+export const DEFAULT_CARD_POSITION = 'normal'
+
+const CARD_POSITION_STORAGE_KEY = 'buddytalk.cardPosition'
+
+export function getCardPosition(id) {
+  return (
+    CARD_POSITIONS.find((p) => p.id === id) ||
+    CARD_POSITIONS.find((p) => p.id === DEFAULT_CARD_POSITION)
+  )
+}
+
+export function loadCardPosition() {
+  try {
+    const saved = window.localStorage.getItem(CARD_POSITION_STORAGE_KEY)
+    if (saved && CARD_POSITIONS.some((p) => p.id === saved)) return saved
+  } catch {
+    // Storage unavailable -- fall through to the default.
+  }
+  return DEFAULT_CARD_POSITION
+}
+
+export function saveCardPosition(id) {
+  try {
+    window.localStorage.setItem(CARD_POSITION_STORAGE_KEY, id)
   } catch {
     // Saving failed; the choice still applies for this session.
   }

@@ -132,16 +132,21 @@ app.use((req, res, next) => {
 
     /*
      * DEVELOPMENT ONLY: also accept a private-network origin, so a phone on
-     * the same Wi-Fi (e.g. http://192.168.0.106:5173) can reach the API.
+     * the same Wi-Fi (e.g. http://192.168.0.4:5173) can reach the API while
+     * testing on a real device.
      *
-     * Gated on the same DEV_LOGIN_ENABLED switch as the dev sign-in route and
-     * on NODE_ENV, so it is inert in production. The pattern matches ONLY the
-     * three RFC-1918 private ranges -- never a public host -- so this cannot
-     * open the API to the internet even while enabled.
+     * This is a CORS convenience, not an authentication shortcut: a request
+     * from such an origin still has to carry a valid session cookie, and
+     * every protected route checks it exactly as before.
+     *
+     * Two independent conditions, so it is inert in production: NODE_ENV must
+     * not be "production", and DEV_LAN_CORS must be explicitly "true". The
+     * pattern matches ONLY the three RFC-1918 private ranges -- never a
+     * public host -- so it cannot open the API to the internet even when on.
      */
     const devLanAllowed =
         process.env.NODE_ENV !== "production" &&
-        process.env.DEV_LOGIN_ENABLED === "true" &&
+        process.env.DEV_LAN_CORS === "true" &&
         typeof requestOrigin === "string" &&
         /^http:\/\/(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?::\d+)?$/.test(requestOrigin);
 
@@ -360,7 +365,10 @@ const dbState = {
     ready: false,
     lastError: null,
     connectedAt: null,
-    attempts: 0
+    attempts: 0,
+    /* True while the retry loop is already running, so a burst of failing
+       requests cannot start several loops racing each other. */
+    reconnecting: false
 };
 
 /*
@@ -373,13 +381,72 @@ const dbState = {
  */
 function requireDatabase(req, res, next) {
     if (dbState.ready) return next();
+    return databaseUnavailable(res);
+}
 
+/*
+ * The 503 body, in one place so every database failure answers identically.
+ *
+ * Used both by requireDatabase (before a request starts) and by a route whose
+ * query THREW mid-flight -- the case that matters most here. A connection can
+ * be marked ready and still fail: the driver only discovers the server has
+ * gone when it next tries to use it. Reporting that as anything other than
+ * "database unavailable" is what previously logged people out.
+ */
+function databaseUnavailable(res) {
     res.set("Retry-After", "5");
     return res.status(503).json({
         success: false,
         code: "DATABASE_UNAVAILABLE",
-        message: "The service is starting up. Please try again in a moment."
+        message: "The service is temporarily unavailable. Please try again in a moment."
     });
+}
+
+/*
+ * Is this error the database being unreachable, rather than a genuine fault
+ * in the request?
+ *
+ * The driver reports connectivity problems through a small family of error
+ * names and a TLS/socket message; anything else (a duplicate key, a bad
+ * ObjectId) is a real application error and must keep its own status.
+ */
+function isDatabaseUnavailable(error) {
+    if (!error) return false;
+    const name = error.name || "";
+    if (
+        name === "MongoServerSelectionError" ||
+        name === "MongoNetworkError" ||
+        name === "MongoNotConnectedError" ||
+        name === "MongoTopologyClosedError" ||
+        name === "MongoNetworkTimeoutError"
+    ) {
+        return true;
+    }
+    const message = String(error.message || "");
+    return /ECONNREFUSED|ENOTFOUND|ETIMEDOUT|SSL routines|tlsv1 alert|topology was destroyed/i.test(message);
+}
+
+/*
+ * A query threw. Mark the connection as no longer ready so /health reports the
+ * truth and the retry loop starts working on it again, then answer 503.
+ *
+ * Without this the process would sit on a dead connection reporting
+ * "ready: true" until someone restarted it.
+ */
+function handleDatabaseFailure(res, error, context) {
+    dbState.ready = false;
+    dbState.lastError = error.message;
+    console.log(`Database unavailable during ${context}:`, error.message);
+
+    /* Bring the retry loop back to life if it has already given up. */
+    if (!dbState.reconnecting) {
+        dbState.reconnecting = true;
+        connectWithRetry().finally(() => {
+            dbState.reconnecting = false;
+        });
+    }
+
+    return databaseUnavailable(res);
 }
 
 async function connectDB() {
@@ -1037,9 +1104,25 @@ app.post("/api/auth/register", requireDatabase, async (req, res) => {
             createdAt: new Date()
         });
 
-        // 6. Success. 201 means "created".
-        //    The hash is deliberately left out of the response -- there is no
-        //    reason for the browser to ever receive it.
+        /*
+         * 6. SIGN THE NEW ACCOUNT IN.
+         *
+         * Creating an account and then not being signed in is the bug behind
+         * "Your session has ended" on the very first Save & Continue: this
+         * route returned 201 with the user, the app moved on to the child
+         * profile screen, and the next request carried no cookie at all --
+         * so a genuinely-unauthenticated 401 came back and was reported as an
+         * expired session.
+         *
+         * The SAME createSession() helper the sign-in and Google routes use,
+         * so the cookie, its attributes and its lifetime are identical no
+         * matter how the account was reached. Nothing is trusted from the
+         * client: the token names the id MongoDB just generated.
+         */
+        createSession(res, { _id: result.insertedId });
+
+        // 201 means "created". The hash is deliberately left out of the
+        // response -- there is no reason for the browser to ever receive it.
         return res.status(201).json({
             success: true,
             message: "Account created successfully.",
@@ -1377,7 +1460,7 @@ app.post("/api/auth/google", requireDatabase, async (req, res) => {
    Useful for checking the cookie actually works, and needed later to keep a
    user signed in across page refreshes.
    ========================================================================== */
-app.get("/api/auth/me", requireDatabase, async (req, res) => {
+app.get("/api/auth/me", async (req, res) => {
     try {
         const token = req.cookies?.session;
 
@@ -1385,10 +1468,42 @@ app.get("/api/auth/me", requireDatabase, async (req, res) => {
             return res.status(401).json({ success: false, message: "Not signed in." });
         }
 
-        const payload = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await users.findOne({ _id: new ObjectId(payload.userId) });
+        /*
+         * The token is verified BEFORE the database is consulted -- and this
+         * route deliberately does NOT sit behind requireDatabase.
+         *
+         * jwt.verify() needs no database, so a bad token is a 401 whether or
+         * not MongoDB is up. Answering 503 to someone who is simply signed
+         * out would keep the app on a loading state instead of showing the
+         * sign-in screen during an outage.
+         */
+        let payload;
+        try {
+            payload = jwt.verify(token, process.env.JWT_SECRET);
+        } catch {
+            // Expired or tampered token -- genuinely not signed in.
+            return res.status(401).json({ success: false, message: "Not signed in." });
+        }
+
+        if (!dbState.ready) return databaseUnavailable(res);
+
+        let user;
+        try {
+            user = await users.findOne({ _id: new ObjectId(payload.userId) });
+        } catch (error) {
+            /*
+             * A database outage must never be reported as "not signed in":
+             * the frontend would drop a valid session and show the login
+             * screen, exactly the bug this route is meant to prevent.
+             */
+            if (isDatabaseUnavailable(error)) {
+                return handleDatabaseFailure(res, error, "session restore");
+            }
+            throw error;
+        }
 
         if (!user) {
+            /* Valid token naming an account that no longer exists. */
             return res.status(401).json({ success: false, message: "Not signed in." });
         }
 
@@ -1397,9 +1512,12 @@ app.get("/api/auth/me", requireDatabase, async (req, res) => {
             user: { id: user._id, name: user.name, email: user.email }
         });
 
-    } catch {
-        // An expired or tampered token lands here.
-        return res.status(401).json({ success: false, message: "Not signed in." });
+    } catch (error) {
+        console.log("Session check failed unexpectedly:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Something went wrong. Please try again."
+        });
     }
 });
 
@@ -1424,13 +1542,17 @@ app.get("/api/auth/me", requireDatabase, async (req, res) => {
  */
 async function requireAuth(req, res, next) {
     /*
-     * Every authenticated route reaches the database, so a 503 while it is
-     * unavailable is more honest than a 401 -- the caller is not signed out,
-     * the service simply cannot answer yet. Checking here covers the board,
-     * folder and card routes in one place.
+     * ORDER MATTERS HERE.
+     *
+     * The token is checked BEFORE the database is consulted, because
+     * jwt.verify() needs no database at all. Checking database readiness
+     * first would answer 503 to a request carrying no cookie or an expired
+     * one -- hiding a genuine "you are signed out" behind "try again later",
+     * so the sign-in screen would never appear during an outage.
+     *
+     * So: no token or a bad token is always 401, outage or not. Only once the
+     * token is known to be good does an unavailable database become a 503.
      */
-    if (!dbState.ready) return requireDatabase(req, res, next);
-
     try {
         const token = req.cookies?.session;
 
@@ -1438,19 +1560,72 @@ async function requireAuth(req, res, next) {
             return res.status(401).json({ success: false, message: "Please sign in first." });
         }
 
-        const payload = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await users.findOne({ _id: new ObjectId(payload.userId) });
+        /*
+         * The TOKEN is checked first, and on its own.
+         *
+         * jwt.verify() is pure computation -- it needs no database -- so a
+         * failure here is unambiguously an authentication problem: the token
+         * is missing, expired, or tampered with. Separating it from the
+         * database lookup below is what makes the 401 trustworthy.
+         */
+        let payload;
+        try {
+            payload = jwt.verify(token, process.env.JWT_SECRET);
+        } catch {
+            // Expired or tampered token -- a genuine authentication failure.
+            return res.status(401).json({ success: false, message: "Please sign in first." });
+        }
+
+        /*
+         * Only now is the database touched, and its failures are reported as
+         * what they are.
+         *
+         * This lookup used to sit inside the same try/catch as the token
+         * check, so ANY error it threw became a 401. A MongoDB outage
+         * therefore told a correctly signed-in user "Please sign in first",
+         * which the Child Profile screen showed as "Your session has ended" --
+         * signing them out of a session that was perfectly valid, and losing
+         * the details they had just typed.
+         *
+         * A database that cannot answer is a 503: the request was fine, the
+         * dependency is down, and trying again shortly is worth it.
+         */
+        /*
+         * The token is good. NOW the database matters -- and if it is known
+         * to be down, say so plainly rather than letting the query below
+         * throw and be guessed at.
+         */
+        if (!dbState.ready) return databaseUnavailable(res);
+
+        let user;
+        try {
+            user = await users.findOne({ _id: new ObjectId(payload.userId) });
+        } catch (error) {
+            if (isDatabaseUnavailable(error)) {
+                return handleDatabaseFailure(res, error, "sign-in check");
+            }
+            throw error;
+        }
 
         if (!user) {
+            /* The token is valid but names a user who no longer exists --
+               a deleted account. That IS an authentication failure. */
             return res.status(401).json({ success: false, message: "Please sign in first." });
         }
 
         req.user = user;
         next();
 
-    } catch {
-        // Expired or tampered token.
-        return res.status(401).json({ success: false, message: "Please sign in first." });
+    } catch (error) {
+        /*
+         * Anything left is an unexpected server fault, not a signed-out user.
+         * Reporting it as 401 would log someone out over a bug.
+         */
+        console.log("requireAuth failed unexpectedly:", error.message);
+        return res.status(500).json({
+            success: false,
+            message: "Something went wrong. Please try again."
+        });
     }
 }
 
@@ -1519,7 +1694,19 @@ app.get("/api/child-profile", requireAuth, async (req, res) => {
         });
 
     } catch (error) {
-        console.log("Fetching child profile failed:", error);
+        /*
+         * A database outage is reported as 503, never 500 and never 401.
+         *
+         * This is what the app start-up reads to decide where to send a
+         * signed-in user. A 500 here would be indistinguishable from "this
+         * user has no profile", so an existing family would be shown the
+         * setup form again and asked to re-enter details they already saved.
+         */
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "loading the child profile");
+        }
+
+        console.log("Fetching child profile failed:", error.message);
         return res.status(500).json({
             success: false,
             message: "Something went wrong. Please try again."
@@ -1591,7 +1778,17 @@ app.post("/api/child-profile", requireAuth, async (req, res) => {
             });
         }
 
-        console.log("Saving child profile failed:", error);
+        /*
+         * A database outage is NOT a server bug and must not be reported as
+         * one: the frontend keeps the caregiver on this screen with their
+         * typed details intact and invites a retry, instead of showing a
+         * generic failure.
+         */
+        if (isDatabaseUnavailable(error)) {
+            return handleDatabaseFailure(res, error, "saving the child profile");
+        }
+
+        console.log("Saving child profile failed:", error.message);
         return res.status(500).json({
             success: false,
             message: "Something went wrong. Please try again."
@@ -2774,95 +2971,6 @@ app.post("/api/auth/logout", (req, res) => {
     return res.status(200).json({ success: true, message: "Signed out." });
 });
 
-/* ==========================================================================
-   ⚠️  DEVELOPMENT-ONLY SIGN-IN  —  DELETE THIS BLOCK BEFORE DEPLOYING  ⚠️
-   ==========================================================================
-
-   WHY THIS EXISTS
-   ---------------
-   Google sign-in cannot complete from a phone on the LAN: Google refuses to
-   serve its button to an origin like http://192.168.0.106:5173, because that
-   origin is not (and cannot practically be) registered in the OAuth console.
-   That blocks testing text-to-speech on a real device, which is the one thing
-   a desktop browser cannot verify.
-
-   WHAT IT DOES
-   ------------
-   Issues a session for an account that ALREADY EXISTS, using the SAME
-   createSession() helper as Google sign-in and password sign-in. It creates
-   no user, invents no identity, and grants no elevated access -- the cookie
-   is the ordinary one, and every route behind requireAuth continues to check
-   it exactly as before.
-
-   WHY THIS IS SAFE
-   ----------------
-   THREE independent conditions must ALL hold, or the route does not exist:
-
-     1. NODE_ENV must not be "production".
-     2. DEV_LOGIN_ENABLED must be exactly "true" in backend/.env.
-     3. DEV_LOGIN_EMAIL must name an existing account.
-
-   Miss any one and the route is never registered, so it 404s like any
-   unknown path. A deploy that forgets to delete this block still cannot use
-   it, because production sets NODE_ENV=production and would need the two
-   extra variables deliberately added.
-
-   Production authentication is untouched: no existing route, middleware, or
-   cookie rule is modified anywhere in this file.
-
-   TO REMOVE AFTER TESTING
-   -----------------------
-   Delete this block, or simply set DEV_LOGIN_ENABLED=false in backend/.env.
-   ========================================================================== */
-if (process.env.NODE_ENV !== "production" && process.env.DEV_LOGIN_ENABLED === "true") {
-    console.warn(
-        "\n⚠️  DEV LOGIN IS ENABLED — POST /api/auth/dev-login is active.\n" +
-        "   This is for local device testing only. Set DEV_LOGIN_ENABLED=false\n" +
-        "   (or delete the block in server.js) when you are finished.\n"
-    );
-
-    app.post("/api/auth/dev-login", async (req, res) => {
-        try {
-            const email = (process.env.DEV_LOGIN_EMAIL || "").trim().toLowerCase();
-
-            if (!email) {
-                return res.status(500).json({
-                    success: false,
-                    message: "DEV_LOGIN_EMAIL is not set in backend/.env."
-                });
-            }
-
-            /* The account must already exist. This route never creates one --
-               that is what keeps it a sign-in shortcut rather than a way to
-               manufacture users. */
-            const user = await users.findOne({ email });
-
-            if (!user) {
-                return res.status(404).json({
-                    success: false,
-                    message: `No account found for ${email}. Sign in normally on your laptop once, then retry.`
-                });
-            }
-
-            /* The SAME session the real sign-in routes issue. */
-            createSession(res, user);
-
-            return res.status(200).json({
-                success: true,
-                devLogin: true,
-                user: {
-                    id: user._id.toString(),
-                    name: user.name,
-                    email: user.email
-                }
-            });
-        } catch (error) {
-            console.log("Dev login failed:", error.message);
-            return res.status(500).json({ success: false, message: "Dev login failed." });
-        }
-    });
-}
-/* ====================== END DEVELOPMENT-ONLY BLOCK ====================== */
 
 /*
  * Starts listening immediately and connects to MongoDB in the background,

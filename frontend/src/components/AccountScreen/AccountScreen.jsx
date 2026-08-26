@@ -452,52 +452,6 @@ function AccountScreen({ onAuthenticated, onForgotPassword }) {
   }
 
   /*
-   * ⚠️ DEVELOPMENT-ONLY SIGN-IN.
-   *
-   * Asks the backend for a session for the account named by DEV_LOGIN_EMAIL.
-   * The backend only answers when NODE_ENV is not production AND
-   * DEV_LOGIN_ENABLED is "true" AND that account already exists -- otherwise
-   * the route is not registered and this simply 404s.
-   *
-   * Once the cookie is set, it hands the user to App through the SAME
-   * onAuthenticated callback the real sign-in paths use, so the child-profile
-   * check and the board load behave identically. Nothing about the AAC board,
-   * card selection, sentence builder or TTS is involved.
-   *
-   * Remove with the backend block when testing is finished.
-   */
-  async function handleDevLogin() {
-    if (isSubmitting) return
-    setIsSubmitting(true)
-    setStatus('')
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/dev-login`, {
-        method: 'POST',
-        credentials: 'include',
-      })
-
-      const data = await response.json().catch(() => null)
-
-      if (!response.ok || !data?.user) {
-        setStatus(
-          data?.message ||
-            'Dev sign-in is not enabled. Set DEV_LOGIN_ENABLED=true and DEV_LOGIN_EMAIL in backend/.env, then restart the backend.',
-        )
-        return
-      }
-
-      setStatus(`Signed in as ${data.user.name} (development mode).`)
-      if (onAuthenticated) onAuthenticated(data.user)
-    } catch (error) {
-      console.log('Dev sign-in request failed:', error)
-      setStatus('Could not reach the server. Check the backend is running and reachable from this device.')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  /*
    * Runs when the user presses "Continue with Google".
    * Loads Google's library, then opens its account-picker popup.
    */
@@ -826,31 +780,7 @@ function AccountScreen({ onAuthenticated, onForgotPassword }) {
             tabIndex={-1}
           />
 
-          {/*
-            ⚠️ DEVELOPMENT-ONLY SIGN-IN — see backend/server.js for the route.
-
-            `import.meta.env.DEV` is true only under `npm run dev`. Vite
-            replaces it with the literal `false` in `npm run build`, so this
-            entire block is removed by dead-code elimination and cannot appear
-            in a production bundle even if this code is left in place.
-
-            It exists because Google refuses to serve its sign-in button to a
-            LAN origin like http://192.168.0.106:5173, which makes testing
-            speech on a real phone impossible otherwise.
-          */}
-          {import.meta.env.DEV && (
-            <button
-              type="button"
-              className="account__google"
-              onClick={handleDevLogin}
-              disabled={isSubmitting}
-              style={{ borderStyle: 'dashed' }}
-            >
-              🛠️ Dev sign-in (testing only)
-            </button>
-          )}
-
-          {/*
+                    {/*
             Plain sentence on the cream background -- no box, oval or pill.
             Only the action word is a button, so only it is focusable and
             clickable. It stays a real <button> rather than a styled <span>
