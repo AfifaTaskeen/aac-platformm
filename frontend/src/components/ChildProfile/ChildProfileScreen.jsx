@@ -36,7 +36,41 @@ const VOICE_OPTIONS = [
   { value: 'female', label: 'Female' },
 ]
 
-const GRID_OPTIONS = [2, 3, 4]
+/*
+ * The card-size choices, in the order a caregiver sees them.
+ *
+ * The LABEL is what the caregiver picks; the `value` is the number this
+ * profile has always stored and is left exactly as it was, so existing
+ * profiles keep working and nothing has to be migrated in the database.
+ *
+ * NOTE THE INVERSION. The stored number is the COLUMN BASIS, so a bigger
+ * number means more columns and therefore SMALLER cards:
+ *
+ *     4  ->  150px cards  ->  "Small"
+ *     3  ->  190px cards  ->  "Medium"
+ *     2  ->  260px cards  ->  "Large"
+ *
+ * Mapping these the intuitive way round (2 -> Small) would make "Small"
+ * produce the biggest cards on the board, which is why the pairing is spelled
+ * out here rather than derived.
+ *
+ * These are the same widths CARD_WIDTH_BY_GRID uses in CommunicationBoard.jsx
+ * -- one sizing system, relabelled, not a second one.
+ */
+const GRID_OPTIONS = [
+  { value: 4, label: 'Small' },
+  { value: 3, label: 'Medium' },
+  { value: 2, label: 'Large' },
+]
+
+/* Numbers this profile may legitimately hold. Anything else -- a legacy or
+   corrupted value -- falls back to Medium. */
+const VALID_GRID_VALUES = GRID_OPTIONS.map((option) => option.value)
+
+function normaliseGridSize(value) {
+  const n = Number(value)
+  return VALID_GRID_VALUES.includes(n) ? n : 3
+}
 
 /*
  * A small drawing of what a grid size means, so the choice is understandable
@@ -65,7 +99,7 @@ function ChildProfileScreen({ existingProfile = null, onSaved }) {
     childName: existingProfile?.childName || '',
     gender: existingProfile?.gender || '',
     voice: existingProfile?.voice || '',
-    gridSize: existingProfile?.gridSize || 3,
+    gridSize: normaliseGridSize(existingProfile?.gridSize),
   })
 
   const [errors, setErrors] = useState({})
@@ -339,21 +373,23 @@ function ChildProfileScreen({ existingProfile = null, onSaved }) {
               </fieldset>
 
               <fieldset className="pickgroup" id="gridSize-group">
-                <legend className="pickgroup__legend">Grid size</legend>
+                <legend className="pickgroup__legend">Card size</legend>
                 <div className="pickgroup__options pickgroup__options--grids">
-                  {GRID_OPTIONS.map((size) => (
+                  {GRID_OPTIONS.map((option) => (
                     <button
-                      key={size}
+                      key={option.value}
                       type="button"
-                      className={`gridpick ${values.gridSize === size ? 'gridpick--on' : ''}`}
-                      onClick={() => handlePick('gridSize', size)}
-                      aria-pressed={values.gridSize === size}
-                      aria-label={`${size} by ${size} grid, ${size * size} cards`}
+                      className={`gridpick ${
+                        values.gridSize === option.value ? 'gridpick--on' : ''
+                      }`}
+                      onClick={() => handlePick('gridSize', option.value)}
+                      aria-pressed={values.gridSize === option.value}
+                      /* The caregiver chooses a card SIZE; the grid dimensions
+                         behind it are an implementation detail. */
+                      aria-label={`${option.label} cards`}
                     >
-                      <GridPreview size={size} />
-                      <span className="gridpick__label">
-                        {size} &times; {size}
-                      </span>
+                      <GridPreview size={option.value} />
+                      <span className="gridpick__label">{option.label}</span>
                     </button>
                   ))}
                 </div>

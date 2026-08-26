@@ -21,28 +21,19 @@
 /*
  * `shift` is added to the column count the screen would otherwise use.
  *
- *   verysmall  +2 columns  -> the most, smallest cards
  *   small      +1 column   -> more, smaller cards
  *   medium      0          -> exactly today's layout, unchanged
  *   large      -1 column   -> fewer, larger cards
  *
- * Very Small extends the same +1 step Small already uses -- it is not a new
- * mechanism, just one more column added on top. effectiveColumns() in
- * CommunicationBoard.jsx floors the result at 1, so no shift, however large,
- * can ever produce zero or negative columns.
+ * effectiveColumns() in CommunicationBoard.jsx floors the result at 1, so no
+ * shift can ever produce zero or negative columns.
  */
 export const GRID_SIZES = [
-  {
-    id: 'verysmall',
-    label: 'Very Small',
-    shift: 2,
-    description: 'The most cards on screen',
-  },
   {
     id: 'small',
     label: 'Small',
     shift: 1,
-    description: 'More cards on screen',
+    description: 'More, smaller cards',
   },
   {
     id: 'medium',
@@ -64,8 +55,22 @@ export const DEFAULT_GRID_SIZE = 'medium'
 
 const STORAGE_KEY = 'buddytalk.gridSize'
 
+/*
+ * Sizes that no longer exist, mapped to the closest one that does.
+ *
+ * 'verysmall' was removed. A caregiver who had chosen it wanted the SMALLEST
+ * cards, so it becomes 'small' -- reading the stored value and silently
+ * falling back to the default would jump them to Medium, which is the
+ * opposite of what they picked.
+ */
+const RETIRED_GRID_SIZES = { verysmall: 'small' }
+
 export function getGridSize(id) {
-  return GRID_SIZES.find((s) => s.id === id) || GRID_SIZES.find((s) => s.id === DEFAULT_GRID_SIZE)
+  const wanted = RETIRED_GRID_SIZES[id] || id
+  return (
+    GRID_SIZES.find((s) => s.id === wanted) ||
+    GRID_SIZES.find((s) => s.id === DEFAULT_GRID_SIZE)
+  )
 }
 
 /*
@@ -79,6 +84,12 @@ export function loadGridSize() {
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY)
     if (saved && GRID_SIZES.some((s) => s.id === saved)) return saved
+    if (saved && RETIRED_GRID_SIZES[saved]) {
+      const replacement = RETIRED_GRID_SIZES[saved]
+      /* Rewritten so the migration happens once rather than on every read. */
+      saveGridSize(replacement)
+      return replacement
+    }
   } catch {
     // Storage unavailable -- fall through to the default.
   }
@@ -327,9 +338,24 @@ export function getCardPosition(id) {
   )
 }
 
-export function loadCardPosition() {
+/*
+ * Keyed BY CHILD, like Card Flexibility.
+ *
+ * A single shared key survives sign-out, so a NEW child profile created on a
+ * device where someone had chosen Left/Center/Right inherited that value and
+ * never started at Normal. Keying by profile id means one child's choice is
+ * simply not readable as another's, and an unknown id falls back to the
+ * default rather than to a neighbour's setting.
+ */
+function cardPositionKeyFor(childProfileId) {
+  return childProfileId
+    ? `${CARD_POSITION_STORAGE_KEY}.${childProfileId}`
+    : CARD_POSITION_STORAGE_KEY
+}
+
+export function loadCardPosition(childProfileId) {
   try {
-    const saved = window.localStorage.getItem(CARD_POSITION_STORAGE_KEY)
+    const saved = window.localStorage.getItem(cardPositionKeyFor(childProfileId))
     if (saved && CARD_POSITIONS.some((p) => p.id === saved)) return saved
   } catch {
     // Storage unavailable -- fall through to the default.
@@ -337,9 +363,9 @@ export function loadCardPosition() {
   return DEFAULT_CARD_POSITION
 }
 
-export function saveCardPosition(id) {
+export function saveCardPosition(id, childProfileId) {
   try {
-    window.localStorage.setItem(CARD_POSITION_STORAGE_KEY, id)
+    window.localStorage.setItem(cardPositionKeyFor(childProfileId), id)
   } catch {
     // Saving failed; the choice still applies for this session.
   }

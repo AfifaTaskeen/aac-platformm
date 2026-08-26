@@ -132,7 +132,6 @@ const STRENGTH = {
    * leave the visible box, so an edge or corner card animates within whatever
    * room it actually has.
    */
-  verysmall: { travel: 0.5, scale: 1.32, duration: 980, anchor: 0.78 },
   small: { travel: 0.55, scale: 1.3, duration: 1030, anchor: 0.72 },
   /* Unchanged -- these two already looked right. anchor 0 means the travel
      maths below reduces to exactly what it was before. */
@@ -150,7 +149,6 @@ let activeCancel = null
  */
 function strengthFor(area) {
   if (!area) return STRENGTH.medium
-  if (area.classList.contains('cboard__cards--verysmall')) return STRENGTH.verysmall
   if (area.classList.contains('cboard__cards--small')) return STRENGTH.small
   if (area.classList.contains('cboard__cards--large')) return STRENGTH.large
   return STRENGTH.medium

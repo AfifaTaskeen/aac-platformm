@@ -194,7 +194,11 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * Where the card grid sits horizontally. 'normal' keeps the pre-existing
    * full-width layout, so an untouched install looks exactly as it did.
    */
-  const [cardPositionId, setCardPositionId] = useState(loadCardPosition)
+  /* Seeded from THIS child's saved value, so a new profile starts at Normal
+     rather than inheriting whatever the previous child on this device chose. */
+  const [cardPositionId, setCardPositionId] = useState(() =>
+    loadCardPosition(childProfile?.id),
+  )
 
   /*
    * Which side the navigation rail sits on. 'right' is the default and the
@@ -345,6 +349,10 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     setDraggingId(null)
     setOrderStatus(null)
     endDrag()
+    /* Re-read Card Position for the child now signed in: state seeded at mount
+       belongs to whoever was here before, and a new profile must start at the
+       default rather than keep the previous child's alignment. */
+    setCardPositionId(loadCardPosition(profileId))
   }, [profileId])
   const dragRef = useRef({
     id: null,
@@ -1296,15 +1304,15 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    *
    * Free space is whatever the card area has beyond that. When the columns
    * are ALREADY narrower than preferred -- a phone in landscape, or a high
-   * column count from Very Small -- there is no free space and the cap is
+   * column count from Small -- there is no free space and the cap is
    * simply not applied, so the layout stays exactly as Normal rather than
    * shrinking cards to manufacture movement.
    *
-   * The preferred width is scaled by the Grid Size setting so all four sizes
-   * compose: Very Small asks for narrower cards than Large, and each keeps
-   * its own natural width rather than every size sharing one fixed figure.
+   * The preferred width is scaled by the Grid Size setting so all three sizes
+   * compose: Small asks for narrower cards than Large, and each keeps its own
+   * natural width rather than every size sharing one fixed figure.
    */
-  const GRID_SIZE_WIDTH_SCALE = { verysmall: 0.7, small: 0.85, medium: 1, large: 1.15 }
+  const GRID_SIZE_WIDTH_SCALE = { small: 0.85, medium: 1, large: 1.15 }
 
   function naturalGridWidth() {
     const cols = effectiveColumns()
@@ -1848,7 +1856,6 @@ function CommunicationBoard({ childProfile, onLogOut }) {
                * They are animation inputs only: no stylesheet rule keys off
                * them, and the column count comes from the grid style.
                */
-              gridSizeId === 'verysmall' ? 'cboard__cards--verysmall' : '',
               gridSizeId === 'small' ? 'cboard__cards--small' : '',
               gridSizeId === 'large' ? 'cboard__cards--large' : '',
             ]
@@ -2027,7 +2034,7 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           cardPosition={cardPositionId}
           onSelectCardPosition={(id) => {
             setCardPositionId(id)
-            saveCardPosition(id)
+            saveCardPosition(id, profileId)
           }}
           cardFlexibility={cardFlexibilityId}
           /*
