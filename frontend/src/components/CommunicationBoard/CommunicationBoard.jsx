@@ -140,16 +140,80 @@ function CommunicationBoard({ childProfile, onLogOut }) {
 
     setBoardError(null)
 
+    /*
+     * WHY THE ABORT IS TRACKED SEPARATELY FROM THE CONTROLLER.
+     *
+     * React StrictMode runs this effect twice in development: the first run's
+     * cleanup aborts request #1 while request #2 is already on its way. That
+     * is normal and harmless -- but it means an AbortError arriving here is
+     * NOT always "the component is going away".
+     *
+     * The catch below has to tell those two cases apart, and
+     * controller.signal.aborted cannot do it: the cleanup has already fired
+     * by the time the rejection is handled, so it reads `true` for a genuine
+     * unmount and for a StrictMode re-run alike.
+     *
+     * `superseded` is set only by THIS effect's cleanup. When it is true the
+     * request was replaced by a newer one, which will set the state itself,
+     * so staying silent is correct. When it is false the abort came from
+     * somewhere else and the board would otherwise sit on "Loading the
+     * board…" with nothing left to update it -- the state a caregiver can
+     * only escape by refreshing the page, which is the reported bug.
+     */
+    let superseded = false
+
+    /*
+     * A LOAD THAT NEVER ANSWERS.
+     *
+     * A rejected request lands in the catch below, but a request that simply
+     * never settles rejects nothing and resolves nothing -- so no handler
+     * runs, `board` stays null, and the card area shows "Loading the board…"
+     * with no Try again beside it. That is precisely the reported symptom:
+     * the screen never arrives and only a manual refresh clears it.
+     *
+     * A browser's own network timeout is minutes long, which is far past the
+     * point a caregiver has given up and reloaded. Twenty seconds is well
+     * beyond a slow-but-working mobile connection -- the slowest real load
+     * measured here was ~1.5s, and the seeding request on a brand-new profile
+     * ~700ms -- so this only fires when something is genuinely wrong.
+     *
+     * It aborts, which routes into the same catch as any other failure, so
+     * there is one recovery path rather than a second kind of error state.
+     */
+    const watchdog = setTimeout(() => {
+      if (!superseded) controller.abort()
+    }, 20000)
+
     fetchBoard({ signal: controller.signal })
-      .then((loaded) => setBoard(loaded))
+      .then((loaded) => {
+        clearTimeout(watchdog)
+        if (superseded) return
+        setBoard(loaded)
+      })
       .catch((error) => {
-        // An abort is this component going away, not a failure to report.
-        if (error.name === 'AbortError') return
+        clearTimeout(watchdog)
+        /* A newer request has taken over; it owns the outcome now. */
+        if (superseded) return
+
+        /*
+         * An abort with no replacement request behind it. Nothing else is
+         * coming, so this MUST leave a state the user can act on rather than
+         * an endless "Loading the board…".
+         */
+        if (error.name === 'AbortError') {
+          setBoardError('Loading the board was interrupted. Please try again.')
+          return
+        }
+
         console.log('Could not load the board:', error)
         setBoardError(error.message || 'Could not load the board. Please try again.')
       })
 
-    return () => controller.abort()
+    return () => {
+      superseded = true
+      clearTimeout(watchdog)
+      controller.abort()
+    }
   }, [reloadCount])
 
   /*
@@ -1530,12 +1594,34 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * Works out whether the card area can still be scrolled, so the Up and
    * Down buttons can be disabled when there is nowhere to go -- rather than
    * looking active but doing nothing.
+   *
+   * While the KEYBOARD is open this deliberately does nothing: the keyboard
+   * owns its own scroll box and reports its state through
+   * handleKeyboardScrollable below. Letting this run as well would immediately
+   * overwrite that answer with a measurement of the card area, which is not
+   * what is on screen -- and the card area never overflows while the keyboard
+   * covers it, so Up/Down would be forced back to disabled.
    */
   const updateScrollState = useCallback(() => {
+    if (isKeyboardOpen) return
     const el = cardAreaRef.current
     if (!el) return
     setCanScrollUp(el.scrollTop > 4)
     setCanScrollDown(el.scrollTop + el.clientHeight < el.scrollHeight - 4)
+  }, [isKeyboardOpen])
+
+  /*
+   * The keyboard's scrolling key area, handed over by the Keyboard component
+   * while it is open and null the rest of the time. Up/Down move THIS when it
+   * is set, and the card area otherwise.
+   */
+  const keyboardScrollRef = useRef(null)
+
+  /* The keyboard telling us whether its keys can still move, so Up and Down
+     reflect the real position instead of being disabled on principle. */
+  const handleKeyboardScrollable = useCallback(({ up, down }) => {
+    setCanScrollUp(up)
+    setCanScrollDown(down)
   }, [])
 
   /* Re-checked whenever the contents change, since a different folder means
@@ -1671,10 +1757,16 @@ function CommunicationBoard({ childProfile, onLogOut }) {
        grid element when the child opens a different folder. */
   }, [updateScrollState, openCategory, isKeyboardOpen])
 
-  /* Moves the card area by most of a screenful, keeping a little overlap so
-     the child does not lose their place. */
+  /*
+   * Moves whatever is currently on screen by most of a screenful, keeping a
+   * little overlap so the child does not lose their place.
+   *
+   * While the keyboard is open that is the KEY area; otherwise it is the card
+   * area, exactly as before. One button, one meaning -- "move what I am
+   * looking at" -- rather than a second pair of arrows for the keyboard.
+   */
   function scrollCards(direction) {
-    const el = cardAreaRef.current
+    const el = (isKeyboardOpen && keyboardScrollRef.current) || cardAreaRef.current
     if (!el) return
     el.scrollBy({ top: direction * el.clientHeight * 0.8, behavior: 'smooth' })
   }
@@ -1705,7 +1797,22 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    */
   function renderCardArea() {
     if (isKeyboardOpen) {
-      return <Keyboard onAddWord={handleAddTypedWord} onClose={() => setIsKeyboardOpen(false)} />
+      return (
+        <Keyboard
+          onAddWord={handleAddTypedWord}
+          onClose={() => setIsKeyboardOpen(false)}
+          /*
+           * The board's OWN delete, passed straight through -- the keyboard's
+           * Delete button removes the last word from the sentence exactly as
+           * the sentence bar's Delete does, rather than carrying a second copy
+           * of that logic.
+           */
+          onDeleteWord={handleDelete}
+          canDeleteWord={sentence.length > 0}
+          scrollRef={keyboardScrollRef}
+          onScrollableChange={handleKeyboardScrollable}
+        />
+      )
     }
 
     /*

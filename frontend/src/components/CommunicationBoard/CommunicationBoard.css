@@ -1360,16 +1360,47 @@
   flex: none;
 }
 
+/*
+   The scrolling key area, moved by the board's Up/Down buttons.
+
+   min-height: 0 is what lets a flex child actually shrink below its content
+   height; without it the box grows to fit every row and never scrolls, which
+   is the state that left Up and Down permanently disabled.
+
+   The rows keep a comfortable minimum height rather than being squeezed to
+   fit, so on a short landscape phone the keys stay touch-sized and the area
+   scrolls instead.
+*/
 .ckeys__rows {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: clamp(5px, 1vh, 10px);
+
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+  /* A finger drag on the keys should scroll them, not be swallowed. */
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
+/*
+   Rows must not collapse.
+
+   `flex: 1` alone (flex-shrink defaults to 1) let every row squeeze until the
+   whole keyboard fitted whatever height was available -- which is why
+   scrollHeight always equalled clientHeight and the board decided there was
+   nothing to scroll, leaving Up and Down disabled with the not-allowed
+   cursor.
+
+   flex-shrink: 0 with a real basis means the rows keep a touch-sized height
+   and the AREA scrolls once they no longer all fit, which is what gives
+   Up/Down something to move on a short landscape screen.
+*/
 .ckeys__row {
-  flex: 1;
+  flex: 1 0 clamp(44px, 7vh, 74px);
   display: flex;
   gap: clamp(4px, 0.7vw, 9px);
   justify-content: center;
@@ -1409,6 +1440,33 @@
   flex: 2;
   background: var(--color-coral);
   font-size: clamp(0.8rem, 1.9vh, 1.1rem);
+}
+
+/*
+   Delete, which replaced the old Back key.
+
+   It borrows the SENTENCE BAR's delete colour (.cbtn--delete) rather than a
+   new one, so the two Delete controls read as the same action wherever the
+   child meets them. That is warmer and more clearly "an action key" than the
+   pale letter keys around it, without competing with Add word's coral.
+
+   The colour is fixed in both themes for the same reason the letter keys are:
+   the icon and border are fixed dark, so the fill must stay pale.
+*/
+.ckeys__key--delete {
+  background: #ffeeb8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(4px, 0.7vw, 9px);
+}
+
+/* The icon rides with the label's size, so it stays in proportion as the
+   keyboard scales down on a short landscape screen. */
+.ckeys__key--delete svg {
+  width: clamp(16px, 2.6vh, 24px);
+  height: clamp(16px, 2.6vh, 24px);
+  flex: none;
 }
 
 .ckeys__key:active:not(:disabled) {
