@@ -199,7 +199,17 @@
    Keyboard keys fade to grey when disabled. Sidebar buttons do not -- see
    below.
 */
+/*
+   A disabled key drops its colour entirely.
+
+   The --tint/--deep custom properties are overridden rather than the
+   `background` alone: the coloured-key rule further down resolves its fill
+   from var(--tint), so setting only `background` here would be re-applied by
+   that later rule and the key would keep looking pressable.
+*/
 .ckeys__key:disabled {
+  --tint: var(--color-cream-warm);
+  --deep: transparent;
   background: var(--color-cream-warm);
   box-shadow: none;
   cursor: not-allowed;
@@ -1402,14 +1412,54 @@
 .ckeys__row {
   flex: 1 0 clamp(44px, 7vh, 74px);
   display: flex;
-  gap: clamp(4px, 0.7vw, 9px);
+  /* Generous gutters: a mis-aimed tap should land in the gap rather than on
+     the neighbouring letter. */
+  gap: clamp(5px, 0.9vw, 11px);
   justify-content: center;
 }
 
 /*
-   A key is a pale physical key in BOTH themes -- its letter and border are
-   fixed dark, so the fill must be fixed pale, for the same reason as the
-   sidebar buttons above.
+   The action row sits slightly apart from the characters above it, so SPACE,
+   DELETE and ADD WORD are not mistaken for more letters. A little extra
+   height as well, since these are the keys pressed with the least accuracy.
+*/
+.ckeys__row--actions {
+  flex-basis: clamp(48px, 8vh, 82px);
+  margin-top: clamp(3px, 0.6vh, 7px);
+}
+
+/*
+   KEEPING THE COLUMNS STRAIGHT.
+
+   The rows are 10, 9, 9 and 8 keys long. With plain `flex: 1` every row would
+   divide the SAME width by its own count, so the eight S-Z keys would each be
+   wider than the nine A-I keys and no letter would line up with the one above
+   it. That would undo the point of the alphabetical layout: the child counts
+   along a column, and a column that wanders is no landmark at all.
+
+   Sizing every character key to one tenth of the row -- the widest row's
+   share -- makes all four rows use an identical key width, so the shorter
+   rows simply end early and stay left-aligned under the longer ones.
+*/
+.ckeys__row--chars {
+  justify-content: flex-start;
+}
+
+.ckeys__row--chars .ckeys__key {
+  flex: 0 0 calc((100% - 9 * clamp(5px, 0.9vw, 11px)) / 10);
+}
+
+/*
+   A key is a pale COLOURED physical key in BOTH themes.
+
+   The fill comes from --tint and the pressed fill from --deep, both set
+   per-key in Keyboard.jsx from the same tint/deep palette the cards use. The
+   letter and border are fixed dark (--color-on-tint), so the fills must stay
+   pale in both themes -- exactly the rule the category cards already follow.
+
+   The fallback in var(--tint, ...) keeps a key readable if it is ever
+   rendered without a hue, so a missing colour degrades to the old pale key
+   rather than to transparent.
 */
 .ckeys__key {
   flex: 1;
@@ -1417,29 +1467,51 @@
   /* Comfortably past the 44px minimum touch target. */
   min-height: clamp(44px, 7vh, 74px);
 
-  background: #f4f1ec;
+  background: var(--tint, #f4f1ec);
   border: 3px solid var(--color-on-tint);
-  border-radius: clamp(8px, 1.4vh, 14px);
-  box-shadow: 0 4px 0 rgba(43, 43, 58, 0.14);
+  border-radius: clamp(12px, 2vh, 20px);
+  /* The deeper hue carries the "raised key" shadow, so the lift belongs to
+     the key's own colour rather than being a generic grey under everything. */
+  box-shadow: 0 4px 0 var(--deep, rgba(43, 43, 58, 0.14));
   cursor: pointer;
 
   font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(0.9rem, 2.4vh, 1.5rem);
+  font-weight: 800;
+  /* Large uppercase characters -- these are read at arm's length by a child
+     who may still be learning the letter shapes. */
+  font-size: clamp(1.1rem, 3.2vh, 2rem);
+  line-height: 1;
+  letter-spacing: 0.02em;
   color: var(--color-on-tint);
 
-  transition: transform 90ms ease-out, box-shadow 90ms ease-out;
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out,
+    background-color 90ms ease-out;
 }
 
+/*
+   The three action keys carry WORDS rather than a single character, so they
+   take a smaller size that still fits "ADD WORD" on a narrow phone.
+*/
 .ckeys__key--wide {
   flex: 2;
-  font-size: clamp(0.8rem, 1.9vh, 1.1rem);
+  font-size: clamp(0.75rem, 2vh, 1.15rem);
+  letter-spacing: 0.04em;
+}
+
+/*
+   Space, Delete and Add word keep the colours they already had in the app:
+   Add word its coral, Delete the sentence bar's yellow (so the two Delete
+   controls match), and Space a neutral pale key so the row's two coloured
+   actions stand out as the deliberate ones.
+*/
+.ckeys__key--space {
+  --tint: #f4f1ec;
+  --deep: #d9d4cb;
 }
 
 .ckeys__key--add {
-  flex: 2;
-  background: var(--color-coral);
-  font-size: clamp(0.8rem, 1.9vh, 1.1rem);
+  --tint: var(--color-coral);
+  --deep: #e0523f;
 }
 
 /*
@@ -1454,7 +1526,8 @@
    the icon and border are fixed dark, so the fill must stay pale.
 */
 .ckeys__key--delete {
-  background: #ffeeb8;
+  --tint: #ffeeb8;
+  --deep: #f5cf57;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1469,7 +1542,13 @@
   flex: none;
 }
 
+/*
+   Pressed: the key sinks onto its own shadow AND deepens to its darker hue.
+   Two signals rather than one, which is the same pressed language the cards
+   and the sentence-bar buttons already use.
+*/
 .ckeys__key:active:not(:disabled) {
+  background: var(--deep, #e6e0d6);
   transform: translateY(3px);
   box-shadow: 0 1px 0 rgba(43, 43, 58, 0.2);
 }

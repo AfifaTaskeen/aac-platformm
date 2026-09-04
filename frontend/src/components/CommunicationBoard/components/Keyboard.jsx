@@ -36,19 +36,54 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  */
 
 /*
- * QWERTY, because that is what a tablet keyboard looks like.
+ * ALPHABETICAL, NOT QWERTY.
  *
- * The number row and the apostrophe are here because their absence was a real
- * gap: a child could not type an age, a house number, or "I'm" -- and the
- * apostrophe in particular turns a typed word into a wrong one rather than
- * merely an unavailable one.
+ * QWERTY is an arrangement a child has to be TAUGHT before it helps them:
+ * its order carries no meaning, so finding a letter means scanning all
+ * twenty-six. A child learning to spell already knows A B C in order, and an
+ * AAC user is usually hunting one letter at a time rather than touch-typing,
+ * so sequential order turns "search the whole board" into "count along from
+ * where I know that letter lives".
+ *
+ * The rows are nine wide so the alphabet breaks A-I / J-R / S-Z, which keeps
+ * each row a predictable length and leaves the last row short rather than
+ * splitting the run at an arbitrary point.
+ *
+ * Numbers lead, on their own row of ten, because they are their own group --
+ * mixing them into the letters would break the alphabetical run the layout
+ * exists to preserve.
  */
-const ROWS = [
-  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-  ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
-  ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', "'"],
-  ['Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '?'],
+const NUMBER_ROW = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+
+const LETTER_ROWS = [
+  ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'],
+  ['J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R'],
+  ['S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'],
 ]
+
+/*
+ * The key colours, as tint/deep pairs.
+ *
+ * This is the SAME system the cards use (see cardData.js): a pale `tint` for
+ * the resting fill and a deeper shade of the same hue for the pressed state,
+ * both chosen so the app's fixed-dark --color-on-tint text stays readable on
+ * them. Reusing the pattern is what keeps the keyboard looking like part of
+ * Buddy Talk rather than a control panel bolted onto it.
+ *
+ * Every letter shares ONE hue, so A-Z reads as a single block. The colour
+ * therefore separates the GROUPS -- letters, numbers, actions -- rather than
+ * distinguishing one letter from another, which the shape of the letter
+ * already does.
+ */
+const LETTER_HUE = { tint: '#dceeff', deep: '#8fc2ec' } /* sky */
+
+/* Numbers keep their own hue, so the row still reads as a separate group. */
+const NUMBER_HUE = { tint: '#bdfffb', deep: '#47d9d0' }
+
+/* The inline custom properties the CSS reads for fill and pressed fill. */
+function hueStyle({ tint, deep }) {
+  return { '--tint': tint, '--deep': deep }
+}
 
 function Keyboard({
   onAddWord,
@@ -169,15 +204,31 @@ function Keyboard({
         open -- see the comment at the top of this file.
       */}
       <div className="ckeys__rows" ref={attach}>
-        {ROWS.map((row, rowIndex) => (
-          <div className="ckeys__row" key={rowIndex}>
+        {/* Numbers first, as one group in one hue. */}
+        <div className="ckeys__row ckeys__row--chars">
+          {NUMBER_ROW.map((digit) => (
+            <button
+              type="button"
+              className="ckeys__key ckeys__key--number"
+              key={digit}
+              style={hueStyle(NUMBER_HUE)}
+              onClick={() => press(digit)}
+            >
+              {digit}
+            </button>
+          ))}
+        </div>
+
+        {/* A to Z in order, every letter in the one shared hue. */}
+        {LETTER_ROWS.map((row, rowIndex) => (
+          <div className="ckeys__row ckeys__row--chars" key={rowIndex}>
             {row.map((letter) => (
               <button
                 type="button"
-                className="ckeys__key"
+                className="ckeys__key ckeys__key--letter"
                 key={letter}
+                style={hueStyle(LETTER_HUE)}
                 onClick={() => press(letter)}
-                aria-label={KEY_LABELS[letter] || letter}
               >
                 {letter}
               </button>
@@ -185,9 +236,18 @@ function Keyboard({
           </div>
         ))}
 
-        <div className="ckeys__row">
-          <button type="button" className="ckeys__key ckeys__key--wide" onClick={() => press(' ')}>
-            Space
+        {/*
+          The three actions, set apart from the characters above by their own
+          row class: they are wider, and they are the only keys that DO
+          something rather than adding a character.
+        */}
+        <div className="ckeys__row ckeys__row--actions">
+          <button
+            type="button"
+            className="ckeys__key ckeys__key--wide ckeys__key--space"
+            onClick={() => press(' ')}
+          >
+            SPACE
           </button>
 
           {/*
@@ -218,32 +278,21 @@ function Keyboard({
                 strokeLinecap="round"
               />
             </svg>
-            <span>Delete</span>
+            <span>DELETE</span>
           </button>
 
           <button
             type="button"
-            className="ckeys__key ckeys__key--add"
+            className="ckeys__key ckeys__key--wide ckeys__key--add"
             onClick={add}
             disabled={!buffer.trim()}
           >
-            Add word
+            ADD WORD
           </button>
         </div>
       </div>
     </section>
   )
-}
-
-/*
- * Spoken names for the keys whose character a screen reader would otherwise
- * read as punctuation or skip entirely.
- */
-const KEY_LABELS = {
-  "'": 'Apostrophe',
-  ',': 'Comma',
-  '.': 'Full stop',
-  '?': 'Question mark',
 }
 
 export default Keyboard
