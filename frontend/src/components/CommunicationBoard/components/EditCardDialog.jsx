@@ -10,6 +10,7 @@ import {
   deleteFolder,
   toStoredUrl,
 } from '../boardApi'
+import AudioRecorder from './AudioRecorder'
 
 /*
  * EditCardDialog.jsx
@@ -156,7 +157,18 @@ function FolderList({ folders, onPick, firstRef }) {
  * added a decision before the real one, and could only ever be a worse
  * version of the picker the device already provides.
  */
-function MediaField({ label, kind, url, fileName, uploading, disabled, inputRef, onChoose }) {
+function MediaField({
+  label,
+  kind,
+  url,
+  fileName,
+  uploading,
+  disabled,
+  inputRef,
+  onChoose,
+  onRemove,
+  children,
+}) {
   const accept =
     kind === 'image'
       ? 'image/jpeg,image/png,image/webp,image/gif'
@@ -187,6 +199,27 @@ function MediaField({ label, kind, url, fileName, uploading, disabled, inputRef,
             {uploading ? 'Uploading…' : kind === 'image' ? 'Choose Image' : 'Choose Audio'}
           </button>
 
+          {/*
+            Removes the custom picture or sound, returning the card to its
+            default: the shipped image for a picture, and the synthetic voice
+            for a sound. Only offered when there is something to remove.
+
+            It clears the reference on this FORM; the card is not written
+            until Save, so Cancel still undoes it. The stored file is tidied
+            up by the same server-side sweep that already runs when a card's
+            media changes.
+          */}
+          {url && onRemove && (
+            <button
+              type="button"
+              className="cedit__btn cedit__btn--soft cedit__btn--remove"
+              onClick={onRemove}
+              disabled={disabled}
+            >
+              {kind === 'image' ? 'Remove Image' : 'Remove Sound'}
+            </button>
+          )}
+
           {/* What is currently set: the chosen filename, or a note that the
               card already has media from before this edit. */}
           {fileName ? (
@@ -204,6 +237,11 @@ function MediaField({ label, kind, url, fileName, uploading, disabled, inputRef,
                controls: this is a caregiver screen, not the child's board. */
             <audio className="cedit__audio" src={url} controls preload="none" />
           )}
+
+          {/* Where the microphone recorder is slotted in for the audio
+              field. Kept as a child rather than built in, so this component
+              stays "show one piece of media and let it be replaced". */}
+          {children}
         </div>
       </div>
 
@@ -250,6 +288,16 @@ function EditCardDialog({ board, onSaved, onClose }) {
      the right file before saving. */
   const [imageName, setImageName] = useState('')
   const [audioName, setAudioName] = useState('')
+
+  /*
+   * A recording that has been made but NOT saved: a File held in memory,
+   * never on the server. Uploaded only when Save is pressed, so discarding it
+   * costs nothing and leaves any previously saved recording untouched.
+   */
+  const [pendingAudio, setPendingAudio] = useState(null)
+
+  /* Deleting a SAVED recording asks first -- see removeSavedAudio(). */
+  const [confirmingAudioDelete, setConfirmingAudioDelete] = useState(false)
   const [folderImageName, setFolderImageName] = useState('')
 
   const [problem, setProblem] = useState('')
@@ -318,6 +366,9 @@ function EditCardDialog({ board, onSaved, onClose }) {
     setAudioUrl(card.audioUrl || null)
     setImageName('')
     setAudioName('')
+    /* A take made while looking at another card must not follow us here. */
+    setPendingAudio(null)
+    setConfirmingAudioDelete(false)
     go(EDIT_CARD)
   }
 
@@ -394,6 +445,59 @@ function EditCardDialog({ board, onSaved, onClose }) {
     }
   }
 
+  /*
+   * A finished microphone recording, held as a PENDING clip.
+   *
+   * WHY NOTHING IS UPLOADED HERE.
+   *
+   * A recording that has only been previewed is not a decision yet. Uploading
+   * on Stop meant a discarded take had already been written to the server --
+   * so "Discard" could not really discard it, and each re-record left an
+   * orphaned file behind. Worse, it overwrote the form's audioUrl, so the
+   * PREVIOUS saved recording was already gone from the form before the
+   * caregiver had agreed to anything.
+   *
+   * Holding the File in memory instead means:
+   *   - Discard is genuinely free: drop the object and nothing was stored.
+   *   - The existing saved recording is untouched until Save succeeds.
+   *   - A failed upload at Save leaves the old recording in place.
+   *
+   * The upload itself still happens through the SAME uploadAudio() a chosen
+   * file uses -- only its timing has moved.
+   */
+  function handleRecorded(file) {
+    setProblem('')
+    /* Re-recording replaces the previous take; the recorder that made it
+       revokes its own preview URL. */
+    setPendingAudio(file)
+  }
+
+  /*
+   * Throws away a recording that was never saved.
+   *
+   * Deliberately does NOT touch audioUrl: that still holds whatever was
+   * saved before this take, and discarding a new take must leave it exactly
+   * as it was.
+   */
+  function discardPendingAudio() {
+    setPendingAudio(null)
+    setProblem('')
+  }
+
+  /*
+   * Removes the recording the card actually has.
+   *
+   * Confirmed first, because unlike discarding a preview this throws away
+   * something the caregiver made and kept. The card is not written until
+   * Save, so this is still reversible with Cancel.
+   */
+  function removeSavedAudio() {
+    setAudioUrl(null)
+    setAudioName('')
+    setPendingAudio(null)
+    setConfirmingAudioDelete(false)
+  }
+
   /* ---------- saving ---------- */
 
   async function saveCard() {
@@ -415,6 +519,25 @@ function EditCardDialog({ board, onSaved, onClose }) {
     setBusy(true)
 
     try {
+      /*
+       * THE PENDING RECORDING IS UPLOADED HERE, not when it was made.
+       *
+       * It happens first and inside the same try, so a failed upload aborts
+       * the save before the card is touched -- which is what keeps the
+       * previously saved recording intact when the network drops. `audioUrl`
+       * is only reassigned once the upload has actually returned a url.
+       */
+      let audioToSave = audioUrl
+
+      if (pendingAudio) {
+        setUploading('audio')
+        try {
+          audioToSave = await uploadAudio(pendingAudio)
+        } finally {
+          setUploading(null)
+        }
+      }
+
       if (editingCard) {
         /*
          * Only CHANGED fields are sent. The backend leaves an absent field
@@ -427,8 +550,8 @@ function EditCardDialog({ board, onSaved, onClose }) {
         /* toStoredUrl strips the API origin that toMediaUrl added for
            display, so MongoDB keeps the portable root-relative form. */
         if (imageUrl !== editingCard.image) changes.imageUrl = toStoredUrl(imageUrl)
-        if ((audioUrl || null) !== (editingCard.audioUrl || null)) {
-          changes.audioUrl = toStoredUrl(audioUrl)
+        if ((audioToSave || null) !== (editingCard.audioUrl || null)) {
+          changes.audioUrl = toStoredUrl(audioToSave)
         }
         if (folderKey !== editingCard.category) changes.folderId = target?.folderId ?? null
 
@@ -443,7 +566,7 @@ function EditCardDialog({ board, onSaved, onClose }) {
           word: trimmed,
           folderId: target?.folderId ?? null,
           imageUrl: toStoredUrl(imageUrl),
-          audioUrl: toStoredUrl(audioUrl),
+          audioUrl: toStoredUrl(audioToSave),
         })
       }
 
@@ -726,6 +849,10 @@ function EditCardDialog({ board, onSaved, onClose }) {
                 disabled={busy}
                 inputRef={imageInputRef}
                 onChoose={(e) => handleFileChosen(e, 'image', setImageUrl, setImageName)}
+                onRemove={() => {
+                  setImageUrl(null)
+                  setImageName('')
+                }}
               />
 
               <MediaField
@@ -736,8 +863,56 @@ function EditCardDialog({ board, onSaved, onClose }) {
                 uploading={uploading === 'audio'}
                 disabled={busy}
                 inputRef={audioInputRef}
-                onChoose={(e) => handleFileChosen(e, 'audio', setAudioUrl, setAudioName)}
-              />
+                onChoose={(e) => {
+                  /* Choosing a file supersedes an unsaved take, so the two
+                     cannot both be waiting to become the card's sound. */
+                  setPendingAudio(null)
+                  handleFileChosen(e, 'audio', setAudioUrl, setAudioName)
+                }}
+                /* Deleting a SAVED sound asks first; see below. */
+                onRemove={() => setConfirmingAudioDelete(true)}
+              >
+                {/*
+                  Recording hands its clip to handleRecorded, which HOLDS it
+                  rather than uploading -- so Discard costs nothing and the
+                  card's existing sound survives until Save succeeds.
+                */}
+                <AudioRecorder
+                  onRecorded={handleRecorded}
+                  onDiscarded={discardPendingAudio}
+                  hasSaved={Boolean(audioUrl)}
+                  disabled={busy}
+                />
+
+                {/*
+                  Confirming the removal of a sound the card actually has.
+                  Inline rather than a separate screen, so the caregiver can
+                  see what they are deleting while they decide.
+                */}
+                {confirmingAudioDelete && (
+                  <div className="crec__confirm" role="alertdialog" aria-label="Delete the sound?">
+                    <p className="crec__confirmtext">
+                      Delete this card&rsquo;s recording? It will go back to the spoken voice.
+                    </p>
+                    <div className="crec__confirmbtns">
+                      <button
+                        type="button"
+                        className="cedit__btn cedit__btn--soft crec__btn--danger"
+                        onClick={removeSavedAudio}
+                      >
+                        <span aria-hidden="true">🗑</span> Delete
+                      </button>
+                      <button
+                        type="button"
+                        className="cedit__btn cedit__btn--soft"
+                        onClick={() => setConfirmingAudioDelete(false)}
+                      >
+                        Keep it
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </MediaField>
 
               <div className="cedit__field">
                 <span className="cedit__label">Folder</span>

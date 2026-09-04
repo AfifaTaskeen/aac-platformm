@@ -2804,6 +2804,148 @@
   height: 36px;
 }
 
+/* --------------------------------------------------------------------------
+   The microphone recorder, inside the Audio field of the card editor.
+
+   It reuses .cedit__btn--soft for its buttons, so Record sits at the same
+   size and weight as "Choose Audio" beside it -- one row of equal controls
+   rather than a new visual language, and already past the 44px touch target.
+   -------------------------------------------------------------------------- */
+.crec {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(6px, 1vh, 10px);
+}
+
+.crec__controls {
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 1.4vw, 14px);
+  flex-wrap: wrap;
+}
+
+.crec__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* The record dot and the stop square: the two shapes every recorder uses, so
+   the buttons are recognisable without reading them. */
+.crec__dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #d94750;
+  flex: none;
+}
+
+.crec__square {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: #d94750;
+  flex: none;
+}
+
+/*
+   While recording, the button carries the state as COLOUR as well as words,
+   and the dot pulses -- so it is obvious the microphone is live even to
+   someone not reading the timer.
+*/
+.crec__btn--stop {
+  background: #ffdde0;
+}
+
+.crec__timer {
+  font-family: var(--font-body);
+  font-size: clamp(0.85rem, 1.7vh, 1rem);
+  color: var(--color-coral-text);
+  font-weight: 700;
+}
+
+.crec__problem {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.85rem, 1.7vh, 1rem);
+  color: var(--color-coral-text);
+}
+
+/*
+   "Not saved yet", under an unsaved take.
+
+   It is the sentence that makes Discard safe to press: without it, a
+   caregiver replacing an existing sound cannot tell whether Discard throws
+   away the new take or the one the card already had.
+*/
+.crec__pending {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.8rem, 1.6vh, 0.95rem);
+  color: var(--color-muted-text);
+}
+
+/* Discard and Delete read as the destructive pair: warm, not alarming --
+   this is a caregiver tidying up, not an error. */
+.crec__btn--discard,
+.crec__btn--danger {
+  background: #ffdfe6;
+}
+
+/*
+   The confirmation for deleting a SAVED recording. A bordered block rather
+   than a modal, so what is being deleted stays visible while deciding.
+*/
+.crec__confirm {
+  margin-top: clamp(6px, 1vh, 10px);
+  padding: clamp(10px, 1.4vh, 14px);
+  border: 3px solid var(--color-on-tint);
+  border-radius: clamp(10px, 1.6vh, 16px);
+  background: #fff4f6;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.2vh, 12px);
+}
+
+.crec__confirmtext {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: clamp(0.85rem, 1.7vh, 1rem);
+  /* Fixed dark: this block keeps its pale fill in both themes, exactly as
+     the coloured controls elsewhere do. */
+  color: var(--color-on-tint);
+}
+
+.crec__confirmbtns {
+  display: flex;
+  gap: clamp(8px, 1.4vw, 14px);
+  flex-wrap: wrap;
+}
+
+.crec__confirmbtns .cedit__btn {
+  flex: 1;
+  min-width: 120px;
+}
+
+/* The pulse is decorative: it repeats forever, so it is switched off for
+   anyone who has asked for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .crec__btn--stop .crec__square {
+    animation: crec-pulse 1.1s ease-in-out infinite;
+  }
+}
+
+@keyframes crec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 /* A success or progress note at the top of a screen. */
 .cedit__notice {
   margin: 0 0 clamp(10px, 1.6vh, 16px);

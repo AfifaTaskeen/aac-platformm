@@ -3140,6 +3140,16 @@ app.patch("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) =
 
         updates.updatedAt = new Date();
 
+        /*
+         * The media this card pointed at BEFORE the update, so a replaced or
+         * removed file can be tidied up afterwards. Read from the pre-update
+         * document because findOneAndUpdate below returns the new one.
+         */
+        const previous = await cards.findOne(
+            { _id: cardId, childProfileId },
+            { projection: { imageUrl: 1, audioUrl: 1 } }
+        );
+
         const result = await cards.findOneAndUpdate(
             { _id: cardId, childProfileId },
             { $set: updates },
@@ -3148,6 +3158,58 @@ app.patch("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) =
 
         if (!result) {
             return res.status(404).json({ success: false, message: "Card not found." });
+        }
+
+        /*
+         * TIDY UP MEDIA THIS CARD NO LONGER USES.
+         *
+         * Re-recording a card wrote a new file and simply stopped referencing
+         * the old one, so every re-record left an orphan on disk that nothing
+         * would ever clean up. The delete-card route already sweeps media the
+         * same way; this closes the same gap for an UPDATE.
+         *
+         * Two guards make it safe to run here:
+         *
+         *   - only a url that actually CHANGED is considered, so an untouched
+         *     picture is never deleted;
+         *   - a url still referenced by any other card of this child is kept,
+         *     because two cards may legitimately share one uploaded file.
+         *
+         * Failure to unlink is deliberately not fatal: the card has already
+         * been updated correctly, and a leftover file is a tidiness problem,
+         * not a correctness one.
+         */
+        try {
+            const orphans = [];
+            for (const field of ["imageUrl", "audioUrl"]) {
+                const before = previous?.[field];
+                if (!before) continue;
+                if (updates[field] === undefined) continue;
+                if (updates[field] === before) continue;
+                orphans.push(before);
+            }
+
+            if (orphans.length > 0) {
+                const others = await cards
+                    .find(
+                        { childProfileId, _id: { $ne: cardId } },
+                        { projection: { imageUrl: 1, audioUrl: 1 } }
+                    )
+                    .toArray();
+
+                const stillReferenced = new Set();
+                for (const other of others) {
+                    if (other.imageUrl) stillReferenced.add(other.imageUrl);
+                    if (other.audioUrl) stillReferenced.add(other.audioUrl);
+                }
+
+                for (const url of orphans) {
+                    if (stillReferenced.has(url)) continue;
+                    await uploads.deleteUploadedMedia(url, childProfileId);
+                }
+            }
+        } catch (cleanupError) {
+            console.log("Tidying up replaced card media failed:", cleanupError.message);
         }
 
         return res.status(200).json({ success: true, card: publicCard(result) });

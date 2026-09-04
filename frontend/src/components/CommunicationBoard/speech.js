@@ -292,6 +292,123 @@ export function speak(text, voicePreference) {
   return speakText(text, { voicePreference })
 }
 
+/* ==========================================================================
+   A CARD'S OWN RECORDED VOICE
+
+   A caregiver can record a card in a voice the child knows -- a parent, a
+   sibling, the child themselves. When a card has one, it is played INSTEAD of
+   the synthetic voice; cards without one are untouched and still speak
+   through speakText().
+
+   The recording is a file on the server, referenced by the card's audioUrl.
+   Nothing is cached here beyond the element currently playing: these are
+   one-word clips, and the browser's own HTTP cache already avoids re-fetching
+   them.
+   ========================================================================== */
+
+/*
+ * The clip currently playing, so the next tap can stop it.
+ *
+ * ONE element at a time, for the same reason speakText interrupts itself: a
+ * child tapping several cards quickly should hear the newest word, not all of
+ * them layered on top of one another.
+ */
+let currentClip = null
+
+function stopCurrentClip() {
+  if (!currentClip) return
+  try {
+    currentClip.pause()
+    currentClip.currentTime = 0
+  } catch {
+    /* Already torn down by the browser -- nothing to stop. */
+  }
+  currentClip = null
+}
+
+/*
+ * Plays a card's recorded audio.
+ *
+ * Returns a Promise for whether it actually started. It resolves FALSE rather
+ * than rejecting when playback is impossible -- a missing file, a codec the
+ * device cannot decode, or autoplay being blocked -- so the caller can fall
+ * back to text-to-speech and the child still hears the word. A recording that
+ * will not play must never leave a card silent.
+ */
+export function playRecording(url, options = {}) {
+  if (typeof window === 'undefined' || !url) return Promise.resolve(false)
+
+  const { interrupt = true } = options
+
+  /*
+   * The synthetic voice and a recording must never overlap. Whichever is
+   * asked for second wins, exactly as two spoken words already do.
+   */
+  if (interrupt) {
+    stopCurrentClip()
+    if (window.speechSynthesis) window.speechSynthesis.cancel()
+  } else if (currentClip && !currentClip.ended) {
+    /* Something is already playing and the caller asked not to cut it off. */
+    return Promise.resolve(false)
+  }
+
+  return new Promise((resolve) => {
+    let audio
+    try {
+      audio = new Audio(url)
+    } catch {
+      resolve(false)
+      return
+    }
+
+    currentClip = audio
+
+    /* Cleared on the way out so a later tap does not try to pause a finished
+       clip, and so nothing holds a reference to it. */
+    const release = () => {
+      if (currentClip === audio) currentClip = null
+    }
+
+    audio.addEventListener('ended', release, { once: true })
+    audio.addEventListener(
+      'error',
+      () => {
+        release()
+        resolve(false)
+      },
+      { once: true },
+    )
+
+    /*
+     * play() rejects when the browser blocks autoplay, which happens on a
+     * page that has not been interacted with yet. A card TAP is an
+     * interaction, so this succeeds in the case that matters -- but it is
+     * caught regardless, because a rejected promise here would otherwise be
+     * an unhandled rejection in the console.
+     */
+    const started = audio.play()
+
+    if (started && typeof started.then === 'function') {
+      started.then(
+        () => resolve(true),
+        () => {
+          release()
+          resolve(false)
+        },
+      )
+    } else {
+      /* Older browsers return undefined from play(). */
+      resolve(true)
+    }
+  })
+}
+
+/* Stops any recording that is playing. Used when the board needs silence --
+   the same job speechSynthesis.cancel() does for the synthetic voice. */
+export function stopRecording() {
+  stopCurrentClip()
+}
+
 /*
  * A short, soft alert tone -- the child getting someone's attention.
  *

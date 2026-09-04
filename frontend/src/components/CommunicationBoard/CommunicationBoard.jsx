@@ -44,7 +44,7 @@ import {
  */
 import { categoryColors } from './cardData'
 import { folderCoverUrl } from './folderCovers'
-import { speakText, playAlert } from './speech'
+import { speakText, playAlert, playRecording, stopRecording } from './speech'
 import './CommunicationBoard.css'
 
 /*
@@ -1451,6 +1451,26 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     /* Stands down a pending control-label cancel so it cannot clip this
        word. See speakControlThen(). */
     controlSpeechToken.current += 1
+
+    /*
+     * A CARD'S OWN RECORDING WINS OVER THE SYNTHETIC VOICE.
+     *
+     * audioUrl is set per CARD, and cards belong to one child profile, so a
+     * recording is automatically that child's alone -- another child's copy
+     * of the same word is a different document with its own audioUrl.
+     *
+     * The fallback is deliberate rather than optimistic: playRecording()
+     * resolves false when the file is missing, the codec is unsupported or
+     * the browser blocks playback, and the word is then spoken instead. A
+     * recording that will not play must never leave the card silent.
+     */
+    if (card.audioUrl) {
+      playRecording(card.audioUrl, { interrupt: !isSpeaking }).then((played) => {
+        if (!played) speakText(card.label, { voicePreference, interrupt: !isSpeaking })
+      })
+      return
+    }
+
     speakText(card.label, { voicePreference, interrupt: !isSpeaking })
   }
 
@@ -1479,6 +1499,15 @@ function CommunicationBoard({ childProfile, onLogOut }) {
      failed utterance changes nothing about how the board behaves.
      ========================================================================== */
   function speakControl(label) {
+    /*
+     * A control press also silences a card's recording.
+     *
+     * speakText's own interrupt only cancels the SYNTHETIC voice; a recording
+     * plays through an <audio> element the speech engine knows nothing about.
+     * Without this, pressing Clear while a recorded word was playing left it
+     * playing over the control's name.
+     */
+    stopRecording()
     speakText(label, { voicePreference, interrupt: true })
   }
 
@@ -1543,6 +1572,11 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     /* Same stand-down as a card tap: a sentence the child asked to hear must
        never be cut short by a control label's cleanup timer. */
     controlSpeechToken.current += 1
+
+    /* A card's recording is a separate <audio> element, so speakText's
+       interrupt cannot reach it. Stop it here or it would play underneath
+       the sentence. */
+    stopRecording()
 
     const started = speakText(text, { voicePreference, interrupt: true })
 
