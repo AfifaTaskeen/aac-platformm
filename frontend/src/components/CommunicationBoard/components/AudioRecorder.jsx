@@ -76,6 +76,30 @@ function pickMimeType() {
  */
 const MAX_SECONDS = 30
 
+/*
+ * WHY RECORDING NEEDS HTTPS, SAID BEFORE IT IS PRESSED.
+ *
+ * getUserMedia is only available in a "secure context": https, or localhost.
+ * Opening the app on a phone over the LAN -- http://192.168.x.x:5173, which is
+ * exactly how this project is tested on a real device -- is NOT secure, so the
+ * microphone is unavailable no matter what permissions are granted.
+ *
+ * The check is `isSecureContext` rather than a protocol test, because that is
+ * the property the browser actually gates the API on, and it correctly treats
+ * localhost as secure.
+ */
+const INSECURE_MESSAGE =
+  'Recording needs a secure (https) address. This page was opened over plain http, ' +
+  'so the microphone is unavailable — you can still choose an audio file instead.'
+
+function secureEnoughToRecord() {
+  if (typeof window === 'undefined') return true
+  /* Older browsers lack isSecureContext; fall back to the rule it encodes. */
+  if (typeof window.isSecureContext === 'boolean') return window.isSecureContext
+  const { protocol, hostname } = window.location
+  return protocol === 'https:' || hostname === 'localhost' || hostname === '127.0.0.1'
+}
+
 function AudioRecorder({ onRecorded, onDiscarded, hasSaved = false, disabled = false }) {
   /*
    * 'idle' | 'recording' | 'processing' | 'done' -- one at a time, so the
@@ -99,6 +123,13 @@ function AudioRecorder({ onRecorded, onDiscarded, hasSaved = false, disabled = f
 
   /* The preview <audio>, so discarding can STOP it before freeing its URL. */
   const previewRef = useRef(null)
+
+  /*
+   * Whether this page can use the microphone at all. Computed once: it cannot
+   * change without a reload, since it depends on the address the page was
+   * opened from.
+   */
+  const [canRecordHere] = useState(secureEnoughToRecord)
 
   /*
    * Releases the microphone.
@@ -153,7 +184,9 @@ function AudioRecorder({ onRecorded, onDiscarded, hasSaved = false, disabled = f
      */
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
       setProblem(
-        'Recording needs a secure (https) connection. You can still choose an audio file instead.',
+        canRecordHere
+          ? 'This browser cannot use the microphone. You can still choose an audio file instead.'
+          : INSECURE_MESSAGE,
       )
       return
     }
@@ -181,6 +214,20 @@ function AudioRecorder({ onRecorded, onDiscarded, hasSaved = false, disabled = f
         )
       } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
         setProblem('No microphone was found on this device.')
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        /*
+         * ANDROID: the microphone exists and permission was granted, but
+         * another app already holds it -- a call, a voice assistant, a video
+         * recording left open in another tab. Chrome on Android reports this
+         * far more often than a desktop browser does, and the generic
+         * "could not start" message sends the caregiver to check permissions
+         * that are in fact already correct.
+         */
+        setProblem(
+          'The microphone is being used by another app. Close it and try again, or choose an audio file instead.',
+        )
+      } else if (error.name === 'OverconstrainedError') {
+        setProblem('This device’s microphone could not be used. You can choose an audio file instead.')
       } else {
         setProblem('Could not start recording. You can choose an audio file instead.')
       }
@@ -419,6 +466,20 @@ function AudioRecorder({ onRecorded, onDiscarded, hasSaved = false, disabled = f
           </p>
         </>
       )}
+
+      {/*
+        Said BEFORE Record is pressed, not after it fails.
+
+        On a phone opened over the LAN (http://192.168.x.x) the microphone can
+        never work, and a caregiver who presses Record, sees nothing happen and
+        then reads an error has already been misled once. Stating it up front,
+        with the alternative alongside, is the difference between a broken
+        feature and an unavailable one.
+
+        Not role="alert": this is a standing condition of the page, not an
+        event, so it should not interrupt a screen reader mid-sentence.
+      */}
+      {!canRecordHere && !problem && <p className="crec__problem">{INSECURE_MESSAGE}</p>}
 
       {problem && (
         <p className="crec__problem" role="alert">

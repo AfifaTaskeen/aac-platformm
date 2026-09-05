@@ -185,37 +185,31 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-/*
- * Serves caregiver-uploaded pictures and audio.
- *
- * Mounted BEFORE express.json() would matter and before the API routes, so a
- * request for /uploads/... is answered with the file and never falls through
- * to a route.
- *
- * These are deliberately NOT behind requireAuth. An <img> or <audio> element
- * cannot send a session cookie on a cross-origin request in every browser, so
- * gating them would break the very thing they exist for. The filenames are 8
- * random bytes, so a URL cannot be guessed, and nothing about a picture of a
- * cup is sensitive in the way the database is. Access control lives on the
- * DATA -- which card belongs to which child -- not on the bytes.
- *
- * `fallthrough: false` means a missing file returns 404 rather than
- * continuing into the API routes and producing a confusing error.
- */
-app.use(
-    uploads.UPLOAD_URL_PREFIX,
-    express.static(uploads.UPLOAD_ROOT, {
-        fallthrough: false,
-        // Uploaded media never changes once written -- the filename is unique
-        // per upload -- so it can be cached hard.
-        maxAge: "30d",
-        index: false,
-        dotfiles: "deny"
-    })
-);
-
 // Parses the Cookie header into req.cookies, so we can read the session back.
 app.use(cookieParser());
+
+/*
+ * UPLOADED MEDIA IS SERVED FURTHER DOWN, BEHIND AUTHENTICATION.
+ *
+ * It used to be an express.static mount right here, deliberately open on the
+ * reasoning that an <img>/<audio> element could not carry a session cookie.
+ * That reasoning was WRONG for this app, and it was measured:
+ *
+ *   - dev  (localhost:5173 -> localhost:5000) is cross-ORIGIN but same-SITE,
+ *     so the SameSite=lax cookie IS sent on subresource loads;
+ *   - prod uses SameSite=None; Secure with Allow-Credentials, which is sent
+ *     cross-site by design.
+ *
+ * A browser probe confirmed cookieSent=true for both an <img> and an <audio>
+ * load before this change was made.
+ *
+ * The consequence of the old mount was that anyone holding a URL -- signed in
+ * or not, any family -- could fetch a child's voice recording. For an AAC app
+ * storing recordings of children, that is the wrong default.
+ *
+ * The replacement lives at the bottom of the file, after requireAuth and
+ * requireChildProfile are defined, because it uses them.
+ */
 
 /* ==========================================================================
    GET /health
@@ -2421,6 +2415,89 @@ function makeUploadRoute(kind) {
 
 app.post("/api/uploads/image", requireAuth, requireChildProfile, makeUploadRoute("image"));
 app.post("/api/uploads/audio", requireAuth, requireChildProfile, makeUploadRoute("audio"));
+
+/* ==========================================================================
+   GET /uploads/:childProfileId/:file
+   A caregiver-uploaded picture or recording, served ONLY to the family it
+   belongs to.
+
+   WHY THIS IS A ROUTE RATHER THAN express.static
+   ----------------------------------------------
+   These files are recordings of children's voices and photographs of their
+   families. The previous static mount served them to anyone holding the URL,
+   including signed-out strangers -- the filenames are unguessable, but that
+   is obscurity, not access control.
+
+   THE OWNERSHIP CHECK IS THE PATH ITSELF
+   --------------------------------------
+   Uploads are written to a folder named after the child profile
+   (uploads.save()), so the FIRST path segment already names the owner. The
+   child id is then taken from the SESSION -- via requireChildProfile, which
+   looks it up by req.user._id -- and compared with the segment. A client
+   cannot influence either side of that comparison: the session id is signed,
+   and the path is checked against it rather than trusted.
+
+   So a forged or guessed childProfileId in the URL simply fails to match the
+   caller's own, and answers 403.
+
+   WHY 403 AND NOT 404 HERE
+   ------------------------
+   requireAuth already answers 401 for a missing session, which is what the
+   browser needs in order to distinguish "sign in again" from "not yours".
+   A wrong owner is a genuine authorisation failure and is reported as one.
+
+   RANGE REQUESTS
+   --------------
+   res.sendFile handles Range, Content-Type, ETag, Last-Modified and
+   conditional requests itself, so seeking inside an <audio> element keeps
+   working exactly as it did under express.static. That is the reason this
+   delegates to sendFile rather than streaming the bytes by hand.
+   ========================================================================== */
+app.get(
+    `${uploads.UPLOAD_URL_PREFIX}/:childProfileId/:file`,
+    requireAuth,
+    requireChildProfile,
+    (req, res) => {
+        const owner = String(req.childProfile._id);
+
+        if (req.params.childProfileId !== owner) {
+            return res.status(403).json({
+                success: false,
+                message: "That file does not belong to this profile."
+            });
+        }
+
+        /*
+         * The filename is checked against the shape uploads.save() generates
+         * -- "<timestamp>-<16 hex chars>.<ext>" -- rather than being passed
+         * through. Anything else cannot be one of our files, so there is no
+         * reason to touch the filesystem with it, and no "..", no separator
+         * and no encoded separator can survive this test.
+         */
+        if (!/^[0-9]+-[0-9a-f]{16}\.[a-z0-9]{2,5}$/i.test(req.params.file)) {
+            return res.status(404).json({ success: false, message: "Not found." });
+        }
+
+        const absolute = path.join(uploads.UPLOAD_ROOT, owner, req.params.file);
+
+        res.sendFile(absolute, {
+            /* Uploaded media never changes once written -- the filename is
+               unique per upload -- so it can be cached hard. `private`
+               matters now that it is per-user: a shared cache must not hand
+               one family's file to another. */
+            headers: { "Cache-Control": "private, max-age=2592000" },
+            dotfiles: "deny"
+        }, (error) => {
+            if (!error) return;
+            if (res.headersSent) return;
+            if (error.code === "ENOENT") {
+                return res.status(404).json({ success: false, message: "Not found." });
+            }
+            console.log("Serving uploaded media failed:", error.message);
+            return res.status(500).json({ success: false, message: "Could not read that file." });
+        });
+    }
+);
 
 /* ==========================================================================
    GET /api/board

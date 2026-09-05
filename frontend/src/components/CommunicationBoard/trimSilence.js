@@ -141,9 +141,25 @@ function findSpeechBounds(buffer) {
   }
 }
 
-/* Writes an AudioBuffer slice as a 16-bit PCM WAV. */
+/*
+ * Writes an AudioBuffer slice as a 16-bit PCM MONO WAV.
+ *
+ * WHY MONO.
+ *
+ * A card holds one spoken word, which carries no stereo information -- and
+ * WAV is uncompressed, so keeping a second identical channel doubles the file
+ * for nothing. That matters twice over on a phone: it is the caregiver's
+ * mobile data on upload, and it is the headroom against the server's 8MB
+ * limit. A 30-second clip (the recorder's cap) is ~5.0MB in stereo at 44.1kHz
+ * but ~2.5MB in mono -- and on an Android device that records at 48kHz,
+ * stereo would reach ~5.5MB while mono stays comfortably clear.
+ *
+ * Channels are AVERAGED rather than one being dropped, so a device that
+ * happens to feed the microphone into only one side is not reduced to silence.
+ */
 function encodeWav(buffer, startSample, endSample) {
-  const channelCount = buffer.numberOfChannels
+  const sourceChannels = buffer.numberOfChannels
+  const channelCount = 1
   const frames = endSample - startSample
   const bytesPerSample = 2
   const blockAlign = channelCount * bytesPerSample
@@ -171,17 +187,20 @@ function encodeWav(buffer, startSample, endSample) {
   view.setUint32(40, dataBytes, true)
 
   const channels = []
-  for (let c = 0; c < channelCount; c++) channels.push(buffer.getChannelData(c))
+  for (let c = 0; c < sourceChannels; c++) channels.push(buffer.getChannelData(c))
 
   let offset = 44
   for (let i = startSample; i < endSample; i++) {
-    for (let c = 0; c < channelCount; c++) {
-      /* Clamp before scaling: a sample slightly outside -1..1 would otherwise
-         wrap around and become a loud click. */
-      const sample = Math.max(-1, Math.min(1, channels[c][i]))
-      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
-      offset += 2
-    }
+    /* Average every source channel into the one output channel. */
+    let mixed = 0
+    for (let c = 0; c < sourceChannels; c++) mixed += channels[c][i]
+    mixed /= sourceChannels
+
+    /* Clamp before scaling: a sample slightly outside -1..1 would otherwise
+       wrap around and become a loud click. */
+    const sample = Math.max(-1, Math.min(1, mixed))
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+    offset += 2
   }
 
   return new Blob([out], { type: 'audio/wav' })
@@ -215,10 +234,54 @@ export async function trimSilence(blob) {
     const bytes = await blob.arrayBuffer()
 
     context = new AudioCtx()
-    /* decodeAudioData handles every container MediaRecorder produces here --
-       webm/opus, mp4/aac, ogg -- because the browser decoding it is the same
-       one that recorded it. */
-    const buffer = await context.decodeAudioData(bytes)
+
+    /*
+     * decodeAudioData handles every container MediaRecorder produces here --
+     * webm/opus, mp4/aac, ogg -- because the browser decoding it is the same
+     * one that recorded it.
+     *
+     * TWO ANDROID-SPECIFIC GUARDS:
+     *
+     * 1. Older Android Chrome only supports the CALLBACK form and returns
+     *    undefined instead of a promise, so `await` on it resolves instantly
+     *    to undefined and the next line throws on `.length`. Wrapping both
+     *    forms in one promise covers old and current browsers alike.
+     *
+     * 2. A decode that never settles would leave the recorder stuck on
+     *    "Tidying up…" with no way out -- the clip is already made, so
+     *    hanging there would lose it. The timeout rejects instead, and the
+     *    catch below returns the UNTRIMMED original, which is the right
+     *    trade: an untrimmed recording beats no recording.
+     */
+    const buffer = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('DECODE_TIMEOUT')), 10000)
+
+      let maybePromise
+      try {
+        maybePromise = context.decodeAudioData(
+          bytes,
+          (decoded) => { clearTimeout(timer); resolve(decoded) },
+          (err) => { clearTimeout(timer); reject(err || new Error('DECODE_FAILED')) },
+        )
+      } catch (syncError) {
+        clearTimeout(timer)
+        reject(syncError)
+        return
+      }
+
+      /* The modern promise form -- whichever settles first wins; the
+         callbacks above are simply never called on such a browser. */
+      if (maybePromise && typeof maybePromise.then === 'function') {
+        maybePromise.then(
+          (decoded) => { clearTimeout(timer); resolve(decoded) },
+          (err) => { clearTimeout(timer); reject(err) },
+        )
+      }
+    })
+
+    if (!buffer || !buffer.length) {
+      return { blob, type: blob.type, trimmed: false }
+    }
 
     const bounds = findSpeechBounds(buffer)
 
