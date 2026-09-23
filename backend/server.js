@@ -1370,62 +1370,93 @@ app.post("/api/auth/google", requireDatabase, async (req, res) => {
         });
 
         /*
-         * 4. THE RULE: Google signs people IN. It never signs anybody UP.
+         * 4. NO ACCOUNT YET FOR THIS GOOGLE IDENTITY -- CREATE ONE.
          *
-         * If there is no Buddy Talk account for this Google identity, refuse.
-         * The Sign Up page is the only place an account is created.
+         * Mirrors POST /api/auth/register: same collection, same createdAt
+         * field, same createSession() call afterwards, so a Google-created
+         * account is indistinguishable from a password one in every other
+         * route -- nothing downstream (child-profile, board, uploads) needs
+         * to know or care which path made it.
          *
-         * This is the enforcement point, and it lives HERE, on the server.
-         * The frontend also shows a helpful message, but a frontend check
-         * alone would be worthless: anyone can POST to this route directly
-         * with curl. The decision below is the one that counts.
+         * The differences from a password account, both because Google
+         * already vouched for this identity:
+         *   - no `password` field. There is nothing to hash; a field that
+         *     does not exist cannot be brute-forced, unlike a null or empty
+         *     one, and every password-checking code path already treats a
+         *     missing hash as "this account cannot sign in with a password",
+         *     which is exactly the true state -- signing in still works via
+         *     the googleId/email match above, on the NEXT visit.
+         *   - `googleId` is stored from the start, so a later Google sign-in
+         *     matches directly rather than falling into the "link it now"
+         *     branch below.
          *
-         * Note what is NOT in this function any more: there is no
-         * users.insertOne() anywhere below. Refusing is not a matter of
-         * taking an early return past a create -- there is no create left to
-         * reach. That is what makes "Google never creates an account" a
-         * property of the code rather than a promise about its control flow.
+         * The unique index on email (see connectDB) is what makes the
+         * concurrent-request case safe: if this same identity's token were
+         * somehow POSTed twice at once, the second insert's duplicate-key
+         * error is caught below exactly as it already is for /register.
          */
+        let isNewAccount = false;
+
         if (!user) {
-            return res.status(404).json({
-                success: false,
-                code: "NO_ACCOUNT",
-                message: "No Buddy Talk account was found for this Google account. Please create an account first."
-            });
+            try {
+                const result = await users.insertOne({
+                    name,
+                    email,
+                    googleId,
+                    createdAt: new Date()
+                });
+                user = { _id: result.insertedId, name, email, googleId };
+                isNewAccount = true;
+            } catch (insertError) {
+                if (insertError.code === 11000) {
+                    /* Another request created the same account a moment
+                       ago -- re-read it rather than failing the sign-in. */
+                    user = await users.findOne({ $or: [{ googleId }, { email }] });
+                } else {
+                    throw insertError;
+                }
+            }
         }
 
-        if (!user.googleId) {
-            /*
-             * Existing password account signing in with Google for the first
-             * time: link the two so googleId matches directly next time.
-             */
-            await users.updateOne(
-                { _id: user._id },
-                { $set: { googleId, lastLoginAt: new Date() } }
-            );
-            user = { ...user, googleId };
-        } else {
-            await users.updateOne(
-                { _id: user._id },
-                { $set: { lastLoginAt: new Date() } }
-            );
+        if (!isNewAccount) {
+            if (!user.googleId) {
+                /*
+                 * Existing password account signing in with Google for the
+                 * first time: link the two so googleId matches directly
+                 * next time.
+                 */
+                await users.updateOne(
+                    { _id: user._id },
+                    { $set: { googleId, lastLoginAt: new Date() } }
+                );
+                user = { ...user, googleId };
+            } else {
+                await users.updateOne(
+                    { _id: user._id },
+                    { $set: { lastLoginAt: new Date() } }
+                );
+            }
         }
+        /* A brand-new account has nothing to update yet -- createdAt already
+           marks this moment, and there is no prior login to distinguish it
+           from. */
 
         // 4. Remember that they are signed in.
         createSession(res, user);
 
-        // 5. Reply. Only safe, public fields -- never the password hash, never
-        //    the Google token, never anything from .env.
-        return res.status(200).json({
+        /*
+         * 5. Reply. Only safe, public fields -- never the password hash,
+         *    never the Google token, never anything from .env.
+         *
+         * 201 for a newly created account, 200 for an existing one --
+         * matching the convention /api/auth/register already uses, so
+         * anything checking the status code (rather than isNewAccount)
+         * still sees the answer it expects.
+         */
+        return res.status(isNewAccount ? 201 : 200).json({
             success: true,
-            message: "Signed in with Google.",
-            /*
-             * Always false: this route only ever signs in an account that
-             * already existed. The frontend therefore runs its normal
-             * child-profile check, exactly as it does after a password
-             * sign-in.
-             */
-            isNewAccount: false,
+            message: isNewAccount ? "Account created with Google." : "Signed in with Google.",
+            isNewAccount,
             user: {
                 id: user._id,
                 name: user.name,
@@ -1434,11 +1465,6 @@ app.post("/api/auth/google", requireDatabase, async (req, res) => {
         });
 
     } catch (error) {
-        /*
-         * The duplicate-key (11000) handler that used to live here has gone
-         * with the insert it guarded. This route no longer creates users, so
-         * there is no first-time-sign-in race left to lose.
-         */
         console.log("Google sign-in failed:", error);
 
         return res.status(500).json({
@@ -1997,6 +2023,32 @@ async function nextOrder(collection, filter) {
  * the unique (childProfileId, key) index refuses the second, and error 11000
  * is treated as success -- because the outcome we wanted, exactly one board,
  * is what happened.
+ *
+ * WHY THE RE-QUERY RETRIES
+ * ------------------------
+ * seedBoardForChild() writes folders, THEN cards -- two separate insertMany
+ * calls, not one atomic operation (see boardData.js). That leaves a real
+ * window between them where the collections hold 13 folders and 0 cards.
+ *
+ * A losing request lands in exactly that window: its own insert races in,
+ * folders.insertMany rejects with the duplicate-key error (folders already
+ * exist), the catch below correctly treats that as "someone else is
+ * seeding" -- but the re-query that follows can run BEFORE the winner has
+ * finished inserting cards. It then reads the true state of the database at
+ * that instant, which is 13 folders and 0 cards, and hands that back as the
+ * child's board. This was measured directly: two concurrent /api/board
+ * requests for the same brand-new profile, no browser involved, reproduced
+ * `cards: 0` on the losing side.
+ *
+ * The fix does not change WHAT is written or WHEN -- seedBoardForChild is
+ * untouched, and the winning request still inserts folders before cards
+ * exactly as before. It changes what a request does with an inconsistent
+ * READ: folders-with-no-cards is not "the child has no cards" (a valid board
+ * state does not occur straight after seeding, because seeding always
+ * creates all 301 or none), it is "the other request has not finished yet".
+ * A short bounded wait-and-reread resolves it once the winner's cards land,
+ * which is normally milliseconds -- there is nothing else for either request
+ * to be waiting on.
  */
 async function loadOrSeedBoard(childProfileId) {
     const filter = { childProfileId };
@@ -2015,6 +2067,26 @@ async function loadOrSeedBoard(childProfileId) {
             }
             // Another request seeded first -- the desired end state either way.
         }
+
+        [folderDocs, cardDocs] = await Promise.all([
+            folders.find(filter).sort({ order: 1 }).toArray(),
+            cards.find(filter).sort({ order: 1 }).toArray()
+        ]);
+    }
+
+    /*
+     * Caught mid-seed by ANOTHER request: folders have landed, cards have
+     * not yet. Re-read a few times with a short pause, so this request waits
+     * out the remaining insertMany rather than serving a half-seeded board.
+     *
+     * Bounded (5 attempts, 100ms apart -- half a second total) so a genuine
+     * failure in the other request cannot hang this one forever; if the
+     * window is still open after that, something else is wrong and this
+     * falls through to return exactly what it has, unchanged from today's
+     * behaviour.
+     */
+    for (let attempt = 0; folderDocs.length > 0 && cardDocs.length === 0 && attempt < 5; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
         [folderDocs, cardDocs] = await Promise.all([
             folders.find(filter).sort({ order: 1 }).toArray(),

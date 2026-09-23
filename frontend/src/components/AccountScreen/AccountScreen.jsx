@@ -422,12 +422,14 @@ function AccountScreen({ onAuthenticated, onForgotPassword }) {
         )
 
         /*
-         * Hand the user up to App, which runs the same child-profile check it
-         * runs after a password sign-in. Google only ever signs in an existing
-         * account, so there is no new-account shortcut to take here.
+         * Hand the user up to App, which runs the same child-profile check a
+         * password sign-in runs -- and, for a brand-new Google account, skips
+         * straight to Child Profile instead, exactly as a fresh password
+         * sign-up does. `isNewAccount` lives on `data`, not `data.user`, so it
+         * has to be merged onto the object App actually reads.
          */
         if (onAuthenticated && data?.user) {
-          onAuthenticated(data.user)
+          onAuthenticated({ ...data.user, isNewAccount: Boolean(data.isNewAccount) })
         }
         return
       }

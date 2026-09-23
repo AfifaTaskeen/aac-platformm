@@ -743,15 +743,24 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     if (fromIndex < 0) return
 
     /*
-     * THE INDEX IS MEASURED AGAINST THE LIST AS IT LOOKS NOW, but the card is
-     * removed before it is re-inserted -- which shifts every slot after it
-     * down by one. Without this correction a drop lands one place late, and
-     * dropping onto the first card gave index 1: the first position was only
-     * reachable by aiming at the very left edge of the card.
+     * targetIndex is "take this slot's place" in the list AS IT LOOKS NOW
+     * (slotIndexAt() reads the live DOM, dragged card included) -- an index
+     * into the array BEFORE removal. splice(fromIndex, 1) removes the
+     * dragged card first and splice(clamped, 0, card) re-inserts it, so
+     * clamped must be that same pre-removal index, only clamped to the
+     * shortened array's bounds: targetIndex already names the slot the
+     * dragged card should occupy, on either side of fromIndex, with no
+     * further shift needed.
+     *
+     * A previous version additionally subtracted 1 whenever targetIndex was
+     * past fromIndex. That compensation was wrong -- verified against
+     * splice's actual behaviour for every direction and distance -- and it
+     * made targetIndex === fromIndex + 1 (the very next card) collapse onto
+     * fromIndex and read as "no move", so dropping a card one slot forward
+     * silently did nothing.
      */
-    const adjusted = targetIndex > fromIndex ? targetIndex - 1 : targetIndex
-    const clamped = Math.max(0, Math.min(adjusted, ids.length - 1))
-    if (clamped === fromIndex) return
+    if (targetIndex === fromIndex) return
+    const clamped = Math.max(0, Math.min(targetIndex, ids.length - 1))
 
     ids.splice(clamped, 0, ids.splice(fromIndex, 1)[0])
 
@@ -836,9 +845,26 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     const fromIndex = keys.findIndex((k) => k.type === type && k.id === id)
     if (fromIndex < 0) return
 
-    const adjusted = targetIndex > fromIndex ? targetIndex - 1 : targetIndex
-    const clamped = Math.max(0, Math.min(adjusted, keys.length - 1))
-    if (clamped === fromIndex) return
+    /*
+     * targetIndex is "take this slot's place" in the list AS IT LOOKS NOW
+     * (slotIndexAt() reads the live DOM, dragged item included) -- which is
+     * an index into the array BEFORE removal. splice(fromIndex, 1) removes
+     * the dragged item first and splice(clamped, 0, item) re-inserts it, so
+     * clamped must be that same pre-removal index, clamped only to the
+     * shortened array's bounds: no further shift is needed, because
+     * targetIndex already names the slot the dragged item should end up
+     * occupying, whichever side of fromIndex it falls on.
+     *
+     * A previous version additionally subtracted 1 whenever targetIndex was
+     * past fromIndex, meant to compensate for the remove-then-reinsert shift.
+     * That compensation was wrong -- verified against splice's actual
+     * behaviour for every direction and distance -- and it made
+     * targetIndex === fromIndex + 1 (the very next card) collapse onto
+     * fromIndex and read as "no move", so dropping a card one slot forward
+     * silently did nothing.
+     */
+    if (targetIndex === fromIndex) return
+    const clamped = Math.max(0, Math.min(targetIndex, keys.length - 1))
 
     keys.splice(clamped, 0, keys.splice(fromIndex, 1)[0])
     setPendingHomeOrder(keys)
@@ -1682,13 +1708,26 @@ function CommunicationBoard({ childProfile, onLogOut }) {
 
     function measure() {
       const areaStyle = window.getComputedStyle(el)
-      const pop = parseFloat(areaStyle.getPropertyValue('--pop-room')) || 0
       /*
-       * clientWidth still includes --pop-room: the padding that creates it is
-       * cancelled by an equal negative margin (see .cboard__cards), so it has
-       * to be subtracted explicitly to get the width the grid really occupies.
+       * clientWidth still includes --pop-room (the padding that creates it is
+       * cancelled by an equal negative margin -- see .cboard__cards), so it
+       * has to be subtracted explicitly to get the width the grid really
+       * occupies.
+       *
+       * --pop-room ITSELF is a CUSTOM PROPERTY holding a clamp(): reading it
+       * with getPropertyValue('--pop-room') returns that unresolved formula
+       * as a literal string ("clamp(70px, 12vw, 180px)"), not the pixel
+       * figure it resolves to -- parseFloat() on that string finds no
+       * leading digit and returns NaN, which the `|| 0` fallback silently
+       * turned into "no padding at all". paddingLeft/paddingRight are
+       * ordinary (non-custom) CSS properties, so getComputedStyle resolves
+       * them to real pixel values the normal way; reading the padding
+       * instead of the variable that produced it sidesteps the problem
+       * entirely, and is exactly the amount clientWidth needs subtracted.
        */
-      const usable = el.clientWidth - pop * 2
+      const padLeft = parseFloat(areaStyle.paddingLeft) || 0
+      const padRight = parseFloat(areaStyle.paddingRight) || 0
+      const usable = el.clientWidth - padLeft - padRight
       if (usable > 0) setCardAreaWidth(Math.round(usable * 100) / 100)
 
       const grid = el.querySelector('.cboard__grid')
@@ -1703,7 +1742,18 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     observer.observe(el)
 
     return () => observer.disconnect()
-  }, [openCategory, isKeyboardOpen])
+    /*
+     * boardWidth and boardHeight are dependencies even though the
+     * ResizeObserver above already reacts to the card area's own box changing
+     * size: --cgap is `clamp(6px, 1vh, 12px)`, tied to viewport HEIGHT alone.
+     * A resize that changes the window's height while leaving this element's
+     * box alone never fires the observer, so the gap measured at mount was
+     * reused at every later height and --grid-natural-width ended up built
+     * from a gap the grid was no longer rendering with. Re-running measure()
+     * whenever the tracked viewport size changes keeps it in step whichever
+     * axis moved.
+     */
+  }, [openCategory, isKeyboardOpen, boardWidth, boardHeight])
 
   useEffect(() => {
     const el = cardAreaRef.current
