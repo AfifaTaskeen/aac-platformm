@@ -6,7 +6,8 @@
  * speakText() (the browser's own voice, via the Web Speech API) and
  * playAlert() use browser APIs directly -- no library, no network request, no
  * audio file to load, no API key, no quota. This is the ONLY text-to-speech
- * mechanism in the app; there is no cloud/network fallback.
+ * mechanism currently used by the application; there is no cloud/network
+ * fallback.
  */
 
 /*
