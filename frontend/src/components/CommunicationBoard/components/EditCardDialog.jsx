@@ -250,11 +250,21 @@ function MediaField({
         driven by the button above -- which is what opens the OS picker, and
         therefore what gives access to the gallery, Files, Downloads,
         Documents and Desktop without the app listing any of them.
+
+        `capture="environment"` (image field only) is a HINT, not a second
+        control: on a phone or tablet it makes the OS picker offer the
+        back/outward camera as one of the options alongside the gallery and
+        files, in the SAME picker -- nothing else about the flow changes, and
+        a device or browser that ignores the hint (most desktops) simply
+        shows its ordinary file picker, exactly as before. This is what keeps
+        the field a single "Choose…" button rather than adding a separate
+        camera control, matching the reasoning above.
       */}
       <input
         ref={inputRef}
         type="file"
         accept={accept}
+        capture={kind === 'image' ? 'environment' : undefined}
         className="cedit__file"
         onChange={onChoose}
       />
@@ -415,6 +425,26 @@ function EditCardDialog({ board, onSaved, onClose }) {
     event.target.value = ''
 
     if (!file) return
+
+    /*
+     * A same-device size check, BEFORE spending the upload.
+     *
+     * Must match backend/uploads.js's MAX_IMAGE_BYTES/MAX_AUDIO_BYTES (both
+     * 8MB) -- the server is still the real enforcement (this is a courtesy,
+     * not a security boundary), but without it a caregiver only discovers a
+     * photo is too large after waiting for the whole upload to reach the
+     * server and be refused, which matters most for an uncompressed camera
+     * photo on a slow tablet connection.
+     */
+    const MAX_BYTES = 8 * 1024 * 1024
+    if (file.size > MAX_BYTES) {
+      setProblem(
+        kind === 'image'
+          ? 'That picture is too large (max 8MB). Try a smaller photo.'
+          : 'That sound is too large (max 8MB). Try a shorter recording.',
+      )
+      return
+    }
 
     setProblem('')
     setBusy(true)

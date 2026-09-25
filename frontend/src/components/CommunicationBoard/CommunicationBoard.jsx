@@ -325,6 +325,61 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     saveCardFlexibility(fromProfile, profileId)
   }, [profileId, profileFlexibility])
 
+  /*
+   * THE REMAINING BOARD-DISPLAY SETTINGS -- same pattern as Card Flexibility
+   * above, now that they are also saved on the child profile in MongoDB
+   * rather than only in localStorage.
+   *
+   * Each profile field is null until a caregiver has explicitly chosen a
+   * value for THIS child (see server.js's PATCH /api/child-profile/settings).
+   * null means "nothing saved yet, keep this device's current/default value"
+   * -- it must NOT overwrite the local state with a default, or a brand-new
+   * profile would stomp a value the caller (e.g. loadTextSize()) already
+   * picked. Only a REAL saved value (not null) from the profile wins and is
+   * applied, exactly like Card Flexibility's boolean already does.
+   *
+   * Each effect is keyed on the profile id as well as the value, for the
+   * same reason as above: switching to a different child whose saved value
+   * happens to match what was already in state must still re-sync.
+   */
+  useEffect(() => {
+    if (!profileId || childProfile?.boardGridSize == null) return
+    setGridSizeId(childProfile.boardGridSize)
+    saveGridSize(childProfile.boardGridSize)
+  }, [profileId, childProfile?.boardGridSize])
+
+  useEffect(() => {
+    if (!profileId || childProfile?.textSize == null) return
+    setTextSizeId(childProfile.textSize)
+    saveTextSize(childProfile.textSize)
+  }, [profileId, childProfile?.textSize])
+
+  useEffect(() => {
+    if (!profileId || childProfile?.theme == null) return
+    setThemeId(childProfile.theme)
+    saveTheme(childProfile.theme)
+  }, [profileId, childProfile?.theme])
+
+  useEffect(() => {
+    if (!profileId || childProfile?.boardVoice == null) return
+    setVoiceId(childProfile.boardVoice)
+    saveVoice(childProfile.boardVoice)
+  }, [profileId, childProfile?.boardVoice])
+
+  useEffect(() => {
+    if (!profileId || childProfile?.cardPosition == null) return
+    setCardPositionId(childProfile.cardPosition)
+    saveCardPosition(childProfile.cardPosition, profileId)
+  }, [profileId, childProfile?.cardPosition])
+
+  useEffect(() => {
+    if (!profileId || childProfile?.navPosition == null) return
+    setNavPositionId(childProfile.navPosition)
+    saveNavPosition(childProfile.navPosition)
+  }, [profileId, childProfile?.navPosition])
+
+  /* Animation's own sync effect sits further down, right after animationId/
+     animationChosen are declared -- see there. */
 
   /*
    * The rearranged order, held ONLY in memory until Save Positions.
@@ -475,6 +530,19 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * instruction about this app and is honoured.
    */
   const [animationChosen, setAnimationChosen] = useState(hasAnimationChoice)
+
+  /*
+   * THE CHILD PROFILE IS THE SOURCE OF TRUTH for Animation too -- same
+   * pattern as Card Flexibility and the other settings above, placed here
+   * (rather than beside them) only because it needs animationId/
+   * animationChosen's setters, which are not declared until this point.
+   */
+  useEffect(() => {
+    if (!profileId || childProfile?.animation == null) return
+    setAnimationId(childProfile.animation)
+    saveAnimation(childProfile.animation)
+    setAnimationChosen(true)
+  }, [profileId, childProfile?.animation])
 
   /*
    * The device's reduced-motion preference, kept live.
@@ -1472,6 +1540,15 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * and cutting it off would punish it. `isSpeaking` is already tracked for
    * the "Speaking…" label, so it tells us exactly when to stand back.
    */
+  /*
+   * Speaks TEXT (a word or a whole sentence) with the browser's built-in
+   * voice (Web Speech API). Kept as its own function, same name as before,
+   * so both call sites below are untouched.
+   */
+  function speakWord(text, { interrupt }) {
+    speakText(text, { voicePreference, interrupt })
+  }
+
   function handleSelectCard(card) {
     setSentence((current) => [...current, card])
     /* Stands down a pending control-label cancel so it cannot clip this
@@ -1492,12 +1569,12 @@ function CommunicationBoard({ childProfile, onLogOut }) {
      */
     if (card.audioUrl) {
       playRecording(card.audioUrl, { interrupt: !isSpeaking }).then((played) => {
-        if (!played) speakText(card.label, { voicePreference, interrupt: !isSpeaking })
+        if (!played) speakWord(card.label, { interrupt: !isSpeaking })
       })
       return
     }
 
-    speakText(card.label, { voicePreference, interrupt: !isSpeaking })
+    speakWord(card.label, { interrupt: !isSpeaking })
   }
 
   /* ==========================================================================
@@ -1604,6 +1681,19 @@ function CommunicationBoard({ childProfile, onLogOut }) {
        the sentence. */
     stopRecording()
 
+    /*
+     * "Speaking…" is shown once SOMETHING has started, whichever voice ends
+     * up saying it -- the label means "the board is reading this back", not
+     * "the browser engine specifically is running". The Web Speech API does
+     * fire onend events, but they are unreliable across browsers, so a
+     * timer keeps the label honest without depending on them either way.
+     */
+    const estimatedMs = Math.min(6000, 700 + text.length * 90)
+    function showSpeaking() {
+      setIsSpeaking(true)
+      setTimeout(() => setIsSpeaking(false), estimatedMs)
+    }
+
     const started = speakText(text, { voicePreference, interrupt: true })
 
     if (!started) {
@@ -1614,14 +1704,7 @@ function CommunicationBoard({ childProfile, onLogOut }) {
       return
     }
 
-    /*
-     * Shows "Speaking…" for roughly the length of the sentence. The Web
-     * Speech API does fire onend events, but they are unreliable across
-     * browsers -- a timer keeps the label honest without depending on them.
-     */
-    setIsSpeaking(true)
-    const estimatedMs = Math.min(6000, 700 + text.length * 90)
-    setTimeout(() => setIsSpeaking(false), estimatedMs)
+    showSpeaking()
   }
 
   function handleDelete() {
@@ -2196,21 +2279,34 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           /*
            * Applies immediately -- the board re-renders behind the open
            * dialog, so the effect of a choice is visible while choosing it.
-           * The value is saved at the same moment, so a refresh keeps it.
+           * The value is saved at the same moment, so a refresh keeps it --
+           * and now also written to the child's profile in MongoDB, so it
+           * survives a logout or a move to another device too. The
+           * localStorage write stays as a same-device cache/fast-paint value,
+           * matching Card Flexibility's already-established pattern below.
            */
           onSelectGridSize={(id) => {
             setGridSizeId(id)
             saveGridSize(id)
+            saveChildSettings({ boardGridSize: id }).catch((error) => {
+              setOrderStatus({ kind: 'error', text: error.message || 'Could not save Grid Size.' })
+            })
           }}
           textSize={textSizeId}
           onSelectTextSize={(id) => {
             setTextSizeId(id)
             saveTextSize(id)
+            saveChildSettings({ textSize: id }).catch((error) => {
+              setOrderStatus({ kind: 'error', text: error.message || 'Could not save Text Size.' })
+            })
           }}
           theme={themeId}
           onSelectTheme={(id) => {
             setThemeId(id)
             saveTheme(id)
+            saveChildSettings({ theme: id }).catch((error) => {
+              setOrderStatus({ kind: 'error', text: error.message || 'Could not save Theme.' })
+            })
           }}
           /*
            * Shows the profile's voice until this device chooses its own, so
@@ -2221,11 +2317,17 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           onSelectVoice={(id) => {
             setVoiceId(id)
             saveVoice(id)
+            saveChildSettings({ boardVoice: id }).catch((error) => {
+              setOrderStatus({ kind: 'error', text: error.message || 'Could not save Voice.' })
+            })
           }}
           cardPosition={cardPositionId}
           onSelectCardPosition={(id) => {
             setCardPositionId(id)
             saveCardPosition(id, profileId)
+            saveChildSettings({ cardPosition: id }).catch((error) => {
+              setOrderStatus({ kind: 'error', text: error.message || 'Could not save Card Position.' })
+            })
           }}
           cardFlexibility={cardFlexibilityId}
           /*
@@ -2257,6 +2359,9 @@ function CommunicationBoard({ childProfile, onLogOut }) {
           onSelectNavPosition={(id) => {
             setNavPositionId(id)
             saveNavPosition(id)
+            saveChildSettings({ navPosition: id }).catch((error) => {
+              setOrderStatus({ kind: 'error', text: error.message || 'Could not save Navigation Position.' })
+            })
           }}
           animation={animationId}
           /*
@@ -2269,6 +2374,9 @@ function CommunicationBoard({ childProfile, onLogOut }) {
             setAnimationId(id)
             saveAnimation(id)
             setAnimationChosen(true)
+            saveChildSettings({ animation: id }).catch((error) => {
+              setOrderStatus({ kind: 'error', text: error.message || 'Could not save Animation.' })
+            })
           }}
           /* Settings closes as Edit Words opens, so only one panel is ever
              on screen. */

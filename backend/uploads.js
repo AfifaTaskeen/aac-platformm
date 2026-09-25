@@ -7,9 +7,10 @@
  * -----------------------
  * Everything the rest of the app knows about uploads is `save()`: hand it
  * bytes and a filename, get back a URL to put in a card's imageUrl/audioUrl.
- * Today that writes to a folder on disk. Swapping it for S3, GCS or R2 later
- * means rewriting this one function -- no route, no component and no document
- * has to change, because none of them knows where the bytes went.
+ * Where the bytes actually go -- local disk, or Cloudflare R2 in a real
+ * deployment -- is decided entirely by storage.js, required below. No route,
+ * no component and no document has to change either way, because none of
+ * them knows where the bytes went; only the URL shape (unchanged) matters.
  *
  * WHY THE FILES ARE NOT IN MONGODB
  * --------------------------------
@@ -21,21 +22,18 @@
  * UPLOADS ARE KEPT SEPARATE FROM THE BUILT-IN LIBRARY
  * ---------------------------------------------------
  * Built-in pictures live in frontend/public/cards and are served by the
- * frontend at /cards/... . Uploads go to backend/uploads and are served by
- * THIS server at /uploads/... . Keeping them apart means an upload can never
- * overwrite a shipped image, the shipped set stays reproducible from the
- * repository, and deleting all uploads cannot damage the default board.
+ * frontend at /cards/... . Uploads are served by THIS server at /uploads/...
+ * regardless of which storage.js backend holds them. Keeping them apart
+ * means an upload can never overwrite a shipped image, the shipped set stays
+ * reproducible from the repository, and deleting all uploads cannot damage
+ * the default board.
  */
 
-const fs = require("fs/promises");
-const path = require("path");
 const crypto = require("crypto");
+const storage = require("./storage");
 
-/* Where uploaded files are written. Resolved from this file, so it does not
-   depend on the directory the server was started from. */
-const UPLOAD_ROOT = path.join(__dirname, "uploads");
-
-/* The URL prefix they are served under. */
+/* The URL prefix uploads are served under -- unrelated to where the bytes
+   physically live, see storage.js. */
 const UPLOAD_URL_PREFIX = "/uploads";
 
 /*
@@ -259,17 +257,15 @@ async function save(kind, childProfileId, data, verifiedType) {
         throw error;
     }
 
-    const folder = path.join(UPLOAD_ROOT, String(childProfileId));
-    await fs.mkdir(folder, { recursive: true });
-
     const name = `${Date.now()}-${crypto.randomBytes(8).toString("hex")}${extension}`;
-    await fs.writeFile(path.join(folder, name), data);
+    await storage.put(childProfileId, name, data, verifiedType);
 
     /*
      * A ROOT-RELATIVE URL, matching how the built-in library is referenced,
      * so a card's imageUrl looks the same whether it points at a shipped
-     * picture or an uploaded one. When this moves to object storage the
-     * function returns an https URL instead and nothing else changes.
+     * picture or an uploaded one, and whether storage.js is actually holding
+     * the bytes on local disk or in R2 -- neither the database nor anything
+     * that reads a card's imageUrl needs to know or change either way.
      */
     return `${UPLOAD_URL_PREFIX}/${childProfileId}/${name}`;
 }
@@ -345,29 +341,29 @@ async function deleteUploadedMedia(url, childProfileId) {
         return false;
     }
 
-    const childFolder = path.resolve(UPLOAD_ROOT, String(childProfileId));
-
-    /* decodeURIComponent because a stored url may be percent-encoded. */
-    const relative = decodeURIComponent(url.slice(UPLOAD_URL_PREFIX.length + 1));
-    const target = path.resolve(UPLOAD_ROOT, relative);
-
     /*
-     * The resolved file must sit inside THIS child's folder. path.resolve has
-     * already collapsed any "..", so this comparison is the real check rather
-     * than a string test on the input.
+     * The url's shape must be EXACTLY "/uploads/<childProfileId>/<filename>"
+     * for THIS child, and the filename must be exactly the shape save()
+     * generates. This replaces the old path.resolve()-inside-childFolder
+     * check -- that check made sense when the target was always a real
+     * filesystem path; this one is storage-backend-agnostic (it works
+     * identically whether storage.js is about to touch local disk or R2) and
+     * is if anything stricter, since a filename that does not match the
+     * generated shape is refused outright rather than merely found to
+     * resolve outside the folder.
      */
-    if (target !== childFolder && !target.startsWith(childFolder + path.sep)) {
-        console.log("Refusing to delete media outside the child's upload folder:", url);
+    const rest = decodeURIComponent(url.slice(UPLOAD_URL_PREFIX.length + 1));
+    const [ownerSegment, filename] = rest.split("/");
+
+    if (ownerSegment !== String(childProfileId) || !filename || !/^[0-9]+-[0-9a-f]{16}\.[a-z0-9]{2,5}$/i.test(filename)) {
+        console.log("Refusing to delete media outside the child's own upload:", url);
         return false;
     }
 
     try {
-        await fs.unlink(target);
-        return true;
+        return await storage.remove(childProfileId, filename);
     } catch (error) {
-        if (error.code !== "ENOENT") {
-            console.log("Could not delete uploaded media:", target, error.message);
-        }
+        console.log("Could not delete uploaded media:", url, error.message);
         return false;
     }
 }
@@ -395,7 +391,6 @@ async function deleteMediaForCards(cardDocs, childProfileId, stillReferenced) {
 }
 
 module.exports = {
-    UPLOAD_ROOT,
     UPLOAD_URL_PREFIX,
     MAX_IMAGE_BYTES,
     MAX_AUDIO_BYTES,

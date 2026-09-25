@@ -3,9 +3,10 @@
  * ---------
  * Text-to-speech, and the short alert beep.
  *
- * Both use browser APIs directly. No library, no network request, no audio
- * file to load -- which also means the board still speaks with no internet
- * connection.
+ * speakText() (the browser's own voice, via the Web Speech API) and
+ * playAlert() use browser APIs directly -- no library, no network request, no
+ * audio file to load, no API key, no quota. This is the ONLY text-to-speech
+ * mechanism in the app; there is no cloud/network fallback.
  */
 
 /*
@@ -52,10 +53,16 @@ function looksLike(voice, hints) {
  * Picks the best available voice for the child's saved preference.
  *
  * Preference order:
- *   1. an English voice matching the requested gender
- *   2. any voice matching the requested gender
- *   3. any English voice
- *   4. whatever the browser offers first
+ *   1. an en-IN voice matching the requested gender
+ *   2. any other English voice matching the requested gender
+ *   3. any en-IN voice (any gender)
+ *   4. any English voice at all
+ *
+ * en-IN is preferred first, per BuddyTalk's Indian-English requirement --
+ * checked using the voice's own `lang` property (e.g. "en-IN"), never
+ * guessed from its name. Whether an en-IN voice actually exists is entirely
+ * up to the browser/OS's installed voice list: NOT ALL DEVICES SHIP ONE.
+ * getAvailableLangs() below lets a caller check this directly.
  *
  * It never returns nothing when voices exist: an unavailable preference
  * degrades to a working voice rather than to silence.
@@ -91,27 +98,41 @@ export function pickVoice(preference) {
   if (!english.length) return null
 
   /*
-   * en-US FIRST, then any other English.
+   * en-IN FIRST, then any other English.
    *
-   * The board's utterances are en-US, and a voice whose own tag matches is
-   * the closest fit. But an en-GB or en-IN voice of the RIGHT GENDER is a
-   * better answer than an en-US voice of the wrong one: the child asked for
-   * a male or female voice, and accent is the smaller compromise. So gender
-   * is the outer preference and locale the tie-break inside it.
+   * Checked via the voice's own `lang` tag (e.g. "en-IN"), which is the only
+   * locale signal the Web Speech API actually exposes -- never the voice's
+   * name. A male/female match of a DIFFERENT English accent is still
+   * preferred over an en-IN voice of the wrong gender: the child asked for a
+   * male or female voice, and accent is the smaller compromise. So gender is
+   * the outer preference and locale the tie-break inside it.
    *
    * Both lists are searched before giving up on the request, and only then
    * does it fall back to any English voice at all -- so a device with no
-   * male voice still speaks, in a female one, rather than falling silent.
+   * en-IN voice, or no matching gender, still speaks rather than falling
+   * silent.
    */
-  const enUS = english.filter((v) => (v.lang || '').toLowerCase().replace('_', '-').startsWith('en-us'))
-  const enOther = english.filter((v) => !enUS.includes(v))
+  const enIN = english.filter((v) => (v.lang || '').toLowerCase().replace('_', '-').startsWith('en-in'))
+  const enOther = english.filter((v) => !enIN.includes(v))
 
   return (
-    enUS.find((v) => looksLike(v, hints)) ||
+    enIN.find((v) => looksLike(v, hints)) ||
     enOther.find((v) => looksLike(v, hints)) ||
-    enUS[0] ||
+    enIN[0] ||
     english[0]
   )
+}
+
+/*
+ * Whether an en-IN voice is actually available on this device/browser,
+ * checked via each voice's own `lang` property -- never assumed. Exported so
+ * a caller (e.g. a settings screen) can tell the truth about it rather than
+ * claiming Indian English is guaranteed, per BuddyTalk's requirement that
+ * this never be assumed.
+ */
+export function hasIndianEnglishVoice() {
+  if (!cachedVoices.length) refreshVoices()
+  return cachedVoices.some((v) => (v.lang || '').toLowerCase().replace('_', '-').startsWith('en-in'))
 }
 
 /*

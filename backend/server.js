@@ -11,12 +11,12 @@ const path = require("path");
 /* Promise-based fs, so the image listing can be awaited like everything else. */
 const fs = require("fs/promises");
 const nodemailer = require("nodemailer");
-/* Google Cloud Text-to-Speech, kept in its own module -- see tts.js. */
-const tts = require("./tts");
 /* The starting board a new child profile is given -- see boardData.js. */
 const { seedBoardForChild, ORDER_STEP, toImageUrl, CARD_IMAGE_ROOT } = require("./boardData");
 /* Caregiver-uploaded pictures and audio -- see uploads.js. */
 const uploads = require("./uploads");
+/* Where an upload's BYTES actually live -- local disk or Cloudflare R2. */
+const storage = require("./storage");
 
 const app = express();
 
@@ -1655,6 +1655,26 @@ const ALLOWED_VOICES = ["male", "female"];
 const ALLOWED_GRID_SIZES = [2, 3, 4];
 
 /*
+ * The board-display settings a child can change from the Settings dialog,
+ * previously localStorage-only (see frontend/src/.../boardSettings.js, which
+ * still defines these same option lists and is the single place their
+ * defaults/labels live). Mirrored here only as an allow-list, so a value that
+ * does not match one of these ids is rejected rather than silently stored.
+ *
+ * `boardGridSize` is deliberately a DIFFERENT field from the existing
+ * `gridSize` above: that one is the card WIDTH (2/3/4), chosen once during
+ * profile setup; this one is the column-count SHIFT (small/medium/large)
+ * from the Settings dialog's "Grid Size" -- see boardSettings.js's own note
+ * on the distinction. Reusing one field for both would make them fight.
+ */
+const ALLOWED_BOARD_GRID_SIZES = ["small", "medium", "large"];
+const ALLOWED_TEXT_SIZES = ["small", "medium", "large"];
+const ALLOWED_THEMES = ["light", "dark"];
+const ALLOWED_CARD_POSITIONS = ["normal", "left", "center", "right"];
+const ALLOWED_NAV_POSITIONS = ["right", "left"];
+const ALLOWED_ANIMATIONS = ["on", "off"];
+
+/*
  * Validates an incoming profile. Returns { field, message } for the first
  * problem, or null when everything is acceptable.
  */
@@ -1711,6 +1731,22 @@ app.get("/api/child-profile", requireAuth, async (req, res) => {
                 /* Absent on profiles created before this setting existed, so
                    it is normalised to a real boolean rather than undefined. */
                 cardFlexibility: profile.cardFlexibility === true,
+                /*
+                 * The board-display settings, previously localStorage-only --
+                 * see PATCH /api/child-profile/settings above for what each
+                 * one means and its allow-list. null (rather than a default
+                 * id) on a profile that has never set one, so the frontend
+                 * can tell "never chosen, use the app default" apart from an
+                 * actual saved choice -- the same null-means-no-override
+                 * shape boardSettings.js's loadVoice() already used.
+                 */
+                boardGridSize: profile.boardGridSize ?? null,
+                textSize: profile.textSize ?? null,
+                theme: profile.theme ?? null,
+                boardVoice: profile.boardVoice ?? null,
+                cardPosition: profile.cardPosition ?? null,
+                navPosition: profile.navPosition ?? null,
+                animation: profile.animation ?? null,
                 /* The mixed home layout, or null when never customised. */
                 homeOrder: Array.isArray(profile.homeOrder)
                     ? profile.homeOrder.map((entry) => ({ type: entry.type, id: entry.id }))
@@ -1794,6 +1830,15 @@ app.post("/api/child-profile", requireAuth, async (req, res) => {
                 /* Absent on profiles created before this setting existed, so
                    it is normalised to a real boolean rather than undefined. */
                 cardFlexibility: profile.cardFlexibility === true,
+                /* Same board-display settings as GET /api/child-profile --
+                   see that route's comment for what each one means. */
+                boardGridSize: profile.boardGridSize ?? null,
+                textSize: profile.textSize ?? null,
+                theme: profile.theme ?? null,
+                boardVoice: profile.boardVoice ?? null,
+                cardPosition: profile.cardPosition ?? null,
+                navPosition: profile.navPosition ?? null,
+                animation: profile.animation ?? null,
                 /* The mixed home layout, or null when never customised. */
                 homeOrder: Array.isArray(profile.homeOrder)
                     ? profile.homeOrder.map((entry) => ({ type: entry.type, id: entry.id }))
@@ -2164,6 +2209,71 @@ app.patch("/api/child-profile/settings", requireAuth, async (req, res) => {
             updates.cardFlexibility = body.cardFlexibility;
         }
 
+        /*
+         * The remaining board-display settings, each validated against the
+         * same allow-list boardSettings.js uses on the frontend. Every one is
+         * optional -- a request only ever carries the single setting that was
+         * just changed (see boardApi.js's saveChildSettings callers), so an
+         * absent field here means "leave it alone", never "clear it".
+         */
+        if (body.boardGridSize !== undefined) {
+            if (!ALLOWED_BOARD_GRID_SIZES.includes(body.boardGridSize)) {
+                return res.status(400).json({ success: false, message: "Please choose a valid grid size." });
+            }
+            updates.boardGridSize = body.boardGridSize;
+        }
+
+        if (body.textSize !== undefined) {
+            if (!ALLOWED_TEXT_SIZES.includes(body.textSize)) {
+                return res.status(400).json({ success: false, message: "Please choose a valid text size." });
+            }
+            updates.textSize = body.textSize;
+        }
+
+        if (body.theme !== undefined) {
+            if (!ALLOWED_THEMES.includes(body.theme)) {
+                return res.status(400).json({ success: false, message: "Please choose a valid theme." });
+            }
+            updates.theme = body.theme;
+        }
+
+        /*
+         * boardVoice, DISTINCT FROM the profile's own `voice` (above).
+         *
+         * `voice` is the choice made once during profile setup. This is the
+         * Settings dialog's device-preference OVERRIDE of it -- previously
+         * localStorage-only and nullable ("no override, use the profile's
+         * voice"). Stored as a separate field so setting one never silently
+         * changes the other; null explicitly clears the override.
+         */
+        if (body.boardVoice !== undefined) {
+            if (body.boardVoice !== null && !ALLOWED_VOICES.includes(body.boardVoice)) {
+                return res.status(400).json({ success: false, message: "Please choose a valid voice." });
+            }
+            updates.boardVoice = body.boardVoice;
+        }
+
+        if (body.cardPosition !== undefined) {
+            if (!ALLOWED_CARD_POSITIONS.includes(body.cardPosition)) {
+                return res.status(400).json({ success: false, message: "Please choose a valid card position." });
+            }
+            updates.cardPosition = body.cardPosition;
+        }
+
+        if (body.navPosition !== undefined) {
+            if (!ALLOWED_NAV_POSITIONS.includes(body.navPosition)) {
+                return res.status(400).json({ success: false, message: "Please choose a valid navigation position." });
+            }
+            updates.navPosition = body.navPosition;
+        }
+
+        if (body.animation !== undefined) {
+            if (!ALLOWED_ANIMATIONS.includes(body.animation)) {
+                return res.status(400).json({ success: false, message: "Please choose a valid animation setting." });
+            }
+            updates.animation = body.animation;
+        }
+
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({
                 success: false,
@@ -2196,7 +2306,16 @@ app.patch("/api/child-profile/settings", requireAuth, async (req, res) => {
 
         return res.status(200).json({
             success: true,
-            settings: { cardFlexibility: result.cardFlexibility === true }
+            settings: {
+                cardFlexibility: result.cardFlexibility === true,
+                boardGridSize: result.boardGridSize ?? null,
+                textSize: result.textSize ?? null,
+                theme: result.theme ?? null,
+                boardVoice: result.boardVoice ?? null,
+                cardPosition: result.cardPosition ?? null,
+                navPosition: result.navPosition ?? null,
+                animation: result.animation ?? null
+            }
         });
 
     } catch (error) {
@@ -2488,6 +2607,20 @@ function makeUploadRoute(kind) {
 app.post("/api/uploads/image", requireAuth, requireChildProfile, makeUploadRoute("image"));
 app.post("/api/uploads/audio", requireAuth, requireChildProfile, makeUploadRoute("audio"));
 
+/*
+ * Extension -> Content-Type, for serving a file back when the storage
+ * backend does not itself report one (storage.js's local-disk branch, since
+ * a plain fs.readFile carries no MIME metadata; R2 always returns the type
+ * it was uploaded with). Built once from uploads.js's own MIME->extension
+ * tables (inverted) rather than a second hand-written list, so the two can
+ * never drift apart.
+ */
+const MEDIA_CONTENT_TYPES = Object.fromEntries(
+    Object.entries({ ...uploads.IMAGE_TYPES, ...uploads.AUDIO_TYPES }).map(
+        ([mime, ext]) => [ext.replace(/^\./, ""), mime]
+    )
+);
+
 /* ==========================================================================
    GET /uploads/:childProfileId/:file
    A caregiver-uploaded picture or recording, served ONLY to the family it
@@ -2518,18 +2651,20 @@ app.post("/api/uploads/audio", requireAuth, requireChildProfile, makeUploadRoute
    browser needs in order to distinguish "sign in again" from "not yours".
    A wrong owner is a genuine authorisation failure and is reported as one.
 
-   RANGE REQUESTS
-   --------------
-   res.sendFile handles Range, Content-Type, ETag, Last-Modified and
-   conditional requests itself, so seeking inside an <audio> element keeps
-   working exactly as it did under express.static. That is the reason this
-   delegates to sendFile rather than streaming the bytes by hand.
+   WHERE THE BYTES ACTUALLY COME FROM
+   -----------------------------------
+   storage.js decides: local disk (dev, or no R2 configured) or Cloudflare
+   R2 (a real deployment). This route does not know or care which -- it asks
+   storage.get() for the bytes and serves them, exactly the same response
+   either way. Files here are capped at 8MB (uploads.js's MAX_IMAGE_BYTES/
+   MAX_AUDIO_BYTES), so buffering the whole object rather than a streamed
+   Range response is an acceptable simplification -- this app has no video.
    ========================================================================== */
 app.get(
     `${uploads.UPLOAD_URL_PREFIX}/:childProfileId/:file`,
     requireAuth,
     requireChildProfile,
-    (req, res) => {
+    async (req, res) => {
         const owner = String(req.childProfile._id);
 
         if (req.params.childProfileId !== owner) {
@@ -2543,31 +2678,38 @@ app.get(
          * The filename is checked against the shape uploads.save() generates
          * -- "<timestamp>-<16 hex chars>.<ext>" -- rather than being passed
          * through. Anything else cannot be one of our files, so there is no
-         * reason to touch the filesystem with it, and no "..", no separator
-         * and no encoded separator can survive this test.
+         * reason to ask storage.js for it, and no "..", no separator and no
+         * encoded separator can survive this test.
          */
         if (!/^[0-9]+-[0-9a-f]{16}\.[a-z0-9]{2,5}$/i.test(req.params.file)) {
             return res.status(404).json({ success: false, message: "Not found." });
         }
 
-        const absolute = path.join(uploads.UPLOAD_ROOT, owner, req.params.file);
+        try {
+            const found = await storage.get(owner, req.params.file);
 
-        res.sendFile(absolute, {
-            /* Uploaded media never changes once written -- the filename is
-               unique per upload -- so it can be cached hard. `private`
-               matters now that it is per-user: a shared cache must not hand
-               one family's file to another. */
-            headers: { "Cache-Control": "private, max-age=2592000" },
-            dotfiles: "deny"
-        }, (error) => {
-            if (!error) return;
-            if (res.headersSent) return;
-            if (error.code === "ENOENT") {
+            if (!found) {
                 return res.status(404).json({ success: false, message: "Not found." });
             }
+
+            const extension = req.params.file.slice(req.params.file.lastIndexOf(".") + 1).toLowerCase();
+            const contentType = found.contentType || MEDIA_CONTENT_TYPES[extension] || "application/octet-stream";
+
+            res.set({
+                "Content-Type": contentType,
+                "Content-Length": found.data.length,
+                /* Uploaded media never changes once written -- the filename
+                   is unique per upload -- so it can be cached hard. `private`
+                   matters now that it is per-user: a shared cache must not
+                   hand one family's file to another. */
+                "Cache-Control": "private, max-age=2592000"
+            });
+
+            return res.status(200).send(found.data);
+        } catch (error) {
             console.log("Serving uploaded media failed:", error.message);
             return res.status(500).json({ success: false, message: "Could not read that file." });
-        });
+        }
     }
 );
 
@@ -3596,95 +3738,9 @@ app.delete("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) 
     }
 });
 
-/* ==========================================================================
-   POST /api/tts
-   Turns a word or short sentence into spoken audio.
-
-   The browser sends { text, voice } where voice is "male" or "female" -- the
-   same two values the child profile already stores -- and gets MP3 bytes
-   back.
-
-   The frontend never sees a Google credential, a project id or even a Google
-   voice name: it names one of two preferences and receives audio. All
-   authentication happens here, from the environment.
-
-   Deliberately NOT behind requireAuth for now: this first version is for
-   verifying the Google integration works, and the test commands need to run
-   without a session cookie. Add requireAuth when it is wired to the board.
-   ========================================================================== */
-app.post("/api/tts", async (req, res) => {
-    try {
-        /*
-         * 1. Validate the input FIRST. A malformed request is a client error
-         * whatever the server's configuration happens to be.
-         */
-        const { text, voice } = req.body || {};
-
-        if (typeof text !== "string" || !text.trim()) {
-            return res.status(400).json({
-                success: false,
-                field: "text",
-                message: "Please provide some text to speak."
-            });
-        }
-
-        if (text.trim().length > tts.MAX_TEXT_LENGTH) {
-            return res.status(400).json({
-                success: false,
-                field: "text",
-                message: `Text must be ${tts.MAX_TEXT_LENGTH} characters or fewer.`
-            });
-        }
-
-        if (!tts.ALLOWED_VOICES.includes(voice)) {
-            return res.status(400).json({
-                success: false,
-                field: "voice",
-                message: `Voice must be one of: ${tts.ALLOWED_VOICES.join(", ")}.`
-            });
-        }
-
-        // 2. Only then, check this server can actually reach Google.
-        if (!tts.isConfigured()) {
-            console.log(
-                "Text-to-speech is not configured: set GOOGLE_APPLICATION_CREDENTIALS " +
-                "in backend/.env to the path of your service-account JSON file."
-            );
-            return res.status(503).json({
-                success: false,
-                message: "Speech service is not configured on the server yet."
-            });
-        }
-
-        // 3. Synthesize and return the audio itself, not a JSON wrapper.
-        const audio = await tts.synthesize(text.trim(), voice);
-
-        res.set({
-            "Content-Type": "audio/mpeg",
-            "Content-Length": audio.length,
-            /*
-             * No caching yet, by design -- this first version proves the
-             * integration works. Caching comes later.
-             */
-            "Cache-Control": "no-store"
-        });
-
-        return res.status(200).send(audio);
-
-    } catch (error) {
-        /*
-         * The real reason goes to the server log, where the developer can
-         * see it. The client gets a plain message: a Google error can carry
-         * a project id or key path, and none of that belongs in a response.
-         */
-        console.log("Text-to-speech failed:", error.message);
-
-        return res.status(502).json({
-            success: false,
-            message: "Could not generate speech just now. Please try again."
-        });
-    }
-});
+/* POST /api/tts was removed: TTS is now handled entirely client-side by the
+   browser's Web Speech API (see frontend/src/components/CommunicationBoard/
+   speech.js). There is no server-side or cloud text-to-speech in this app. */
 
 /* ==========================================================================
    POST /api/auth/logout
