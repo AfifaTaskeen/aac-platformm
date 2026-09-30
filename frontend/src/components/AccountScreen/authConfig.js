@@ -87,11 +87,10 @@ function inferApiBase() {
 export const API_BASE_URL = inferApiBase()
 
 /*
- * A deliberately forgiving email check: something, an @, something, a dot,
- * something. Real address validation is the backend's job -- the frontend's
- * job is only to catch obvious typos before the user waits for a round trip.
+ * Gmail addresses only. The backend enforces the identical pattern -- a
+ * browser check can always be bypassed, so the server repeats it.
  */
-export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+export const EMAIL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.]*[A-Za-z0-9])?@gmail\.com$/
 
 export const MIN_PASSWORD_LENGTH = 8
 

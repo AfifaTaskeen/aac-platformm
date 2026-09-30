@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const { MongoClient, ObjectId } = require("mongodb");
 const bcrypt = require("bcrypt");
 const { OAuth2Client } = require("google-auth-library");
@@ -189,6 +190,36 @@ app.use(express.json());
 app.use(cookieParser());
 
 /*
+ * RATE LIMITING FOR AUTHENTICATION ROUTES.
+ *
+ * Login, register, Google sign-in, and password reset are the only routes
+ * that are meaningfully attackable by brute force: guessing a password,
+ * hammering account creation, or exhausting the mail server with reset
+ * requests. Every other route already requires a valid session, which is
+ * its own throttle -- an attacker without a session cannot reach them at
+ * all, so this is deliberately scoped to just these five.
+ *
+ * 20 requests per 15 minutes, per IP, is generous for a real caregiver
+ * (a mistyped password a few times, or a genuine retry after a network
+ * blip) while still cutting off a scripted brute-force attempt long before
+ * it could guess a real password or exhaust bcrypt's own cost factor.
+ *
+ * standardHeaders/legacyHeaders: only the modern RateLimit-* headers are
+ * sent, not the older X-RateLimit-* ones, since nothing here depends on
+ * the legacy shape.
+ */
+const authRateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        message: "Too many attempts. Please wait a few minutes and try again."
+    }
+});
+
+/*
  * UPLOADED MEDIA IS SERVED FURTHER DOWN, BEHIND AUTHENTICATION.
  *
  * It used to be an express.static mount right here, deliberately open on the
@@ -309,8 +340,9 @@ let cards;
 // How many rounds bcrypt uses when hashing. Higher = slower = harder to crack.
 const SALT_ROUNDS = 10;
 
-// Same forgiving check the React form uses: something @ something . something
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Gmail addresses only. Same pattern the React form uses -- a client-side
+// check can always be bypassed, so this is the check that actually counts.
+const EMAIL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.]*[A-Za-z0-9])?@gmail\.com$/;
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -608,16 +640,62 @@ async function connectWithRetry() {
     }
 }
 
+/*
+ * GRACEFUL SHUTDOWN.
+ *
+ * On a container platform, SIGTERM is how a deploy or a scale-down asks the
+ * process to stop -- and by default Node just dies immediately, mid-request,
+ * with the MongoDB socket torn down rather than closed. This is what makes
+ * that a clean stop instead:
+ *
+ *   1. Stop ACCEPTING new connections (httpServer.close()'s callback fires
+ *      once every in-flight request/response has actually finished, not
+ *      before -- that is the whole point of using it here rather than just
+ *      calling process.exit()).
+ *   2. Only then close the MongoDB client, so nothing mid-request loses its
+ *      database connection out from under it.
+ *
+ * A hard timeout backstops this: a request that never finishes (a stuck
+ * proxy, a client that vanished mid-upload) must not keep the process alive
+ * forever and block a deploy that is waiting for it to exit.
+ */
+const SHUTDOWN_TIMEOUT_MS = 10000;
+
+function gracefulShutdown(signal, httpServer) {
+    console.log(`${signal} received. Closing the server...`);
+
+    const forceExit = setTimeout(() => {
+        console.log("Shutdown timed out; exiting anyway.");
+        process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    /* Node would otherwise keep the process alive just to fire this timer. */
+    forceExit.unref();
+
+    httpServer.close(async () => {
+        try {
+            await client.close();
+        } catch {
+            /* Already closed, or never opened -- nothing to clean up. */
+        }
+        clearTimeout(forceExit);
+        console.log("Server closed cleanly.");
+        process.exit(0);
+    });
+}
+
 function startServer() {
     const PORT = process.env.PORT || 5000;
 
-    app.listen(PORT, () => {
+    const httpServer = app.listen(PORT, () => {
         console.log(`Server listening on http://localhost:${PORT}`);
         console.log(`Health check: http://localhost:${PORT}/health`);
     });
 
     // Runs alongside the server rather than gating it.
     connectWithRetry();
+
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM", httpServer));
+    process.on("SIGINT", () => gracefulShutdown("SIGINT", httpServer));
 }
 
 /* ==========================================================================
@@ -808,7 +886,7 @@ async function sendResetEmail(toEmail, resetUrl) {
    has an account. Confirming which emails are registered would let anyone
    discover who uses Buddy Talk one address at a time.
    ========================================================================== */
-app.post("/api/auth/forgot-password", requireDatabase, async (req, res) => {
+app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (req, res) => {
     // One message for every outcome, defined once so no branch can differ.
     const genericResponse = {
         success: true,
@@ -929,7 +1007,7 @@ app.post("/api/auth/forgot-password", requireDatabase, async (req, res) => {
    POST /api/auth/reset-password
    Finishes a password reset: checks the token, then sets the new password.
    ========================================================================== */
-app.post("/api/auth/reset-password", requireDatabase, async (req, res) => {
+app.post("/api/auth/reset-password", authRateLimiter, requireDatabase, async (req, res) => {
     try {
         const { token, password } = req.body;
 
@@ -1011,7 +1089,7 @@ app.post("/api/auth/reset-password", requireDatabase, async (req, res) => {
    POST /api/auth/register
    Creates one new user account.
    ========================================================================== */
-app.post("/api/auth/register", requireDatabase, async (req, res) => {
+app.post("/api/auth/register", authRateLimiter, requireDatabase, async (req, res) => {
     try {
         // 1. Pull the three values out of the JSON the React form sent.
         const { name, email, password } = req.body;
@@ -1160,7 +1238,7 @@ app.post("/api/auth/register", requireDatabase, async (req, res) => {
    Reuses createSession() -- the same session mechanism Google sign-in uses --
    so there is only ever one way a user becomes "signed in".
    ========================================================================== */
-app.post("/api/auth/login", requireDatabase, async (req, res) => {
+app.post("/api/auth/login", authRateLimiter, requireDatabase, async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -1281,7 +1359,7 @@ app.post("/api/auth/login", requireDatabase, async (req, res) => {
    cryptographic signature, the audience (that it was issued for OUR app), the
    issuer, and the expiry.
    ========================================================================== */
-app.post("/api/auth/google", requireDatabase, async (req, res) => {
+app.post("/api/auth/google", authRateLimiter, requireDatabase, async (req, res) => {
     try {
         /*
          * Validate the input FIRST. A malformed request is a client error
@@ -3752,6 +3830,31 @@ app.post("/api/auth/logout", (req, res) => {
     return res.status(200).json({ success: true, message: "Signed out." });
 });
 
+/* ==========================================================================
+   FALLBACK ERROR HANDLER -- must be the LAST app.use(), per Express's own
+   rule that a 4-argument middleware is only ever reached this way.
+
+   Every route above already catches its own errors and answers with a
+   plain JSON message (see the isDatabaseUnavailable/handleDatabaseFailure
+   pattern throughout this file). This exists for the errors that happen
+   BEFORE any route runs -- most notably malformed JSON hitting
+   express.json() above, which throws synchronously and would otherwise
+   fall through to Express's own default handler.
+
+   That default handler renders an HTML page with a full stack trace
+   whenever NODE_ENV is not exactly "production" -- an internal-path leak,
+   and the one place in this app that was not already "always JSON, never a
+   stack trace." This closes that gap without changing what any real route
+   already does.
+   ========================================================================== */
+app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    console.log("Unhandled error:", err);
+    return res.status(err.status || 500).json({
+        success: false,
+        message: "Something went wrong. Please try again."
+    });
+});
 
 /*
  * Starts listening immediately and connects to MongoDB in the background,
