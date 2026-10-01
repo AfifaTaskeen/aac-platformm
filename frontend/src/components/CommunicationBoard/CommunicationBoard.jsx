@@ -5,6 +5,7 @@ import Keyboard from './components/Keyboard'
 import CommunicationCard from './components/CommunicationCard'
 import PlaceholderDialog from './components/PlaceholderDialog'
 import SettingsDialog from './components/SettingsDialog'
+import SettingsPasswordLock from './components/SettingsPasswordLock'
 import EditCardDialog from './components/EditCardDialog'
 import {
   getGridSize,
@@ -36,6 +37,7 @@ import {
   saveHomeOrder,
   resetHomeOrder,
   saveChildSettings,
+  fetchSettingsPasswordStatus,
 } from './boardApi'
 /*
  * The PALETTE only. The words and folders now come from MongoDB; cardData.js
@@ -98,7 +100,7 @@ const HOME_CATEGORY_KEY = '__home__'
  */
 const EMERGENCY_KEY = 'emergency'
 
-function CommunicationBoard({ childProfile, onLogOut }) {
+function CommunicationBoard({ childProfile, user, onLogOut }) {
   /*
    * The sentence being built: an array of card objects, in tap order.
    * Objects rather than strings, so a repeated word is still a distinct
@@ -491,7 +493,36 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     lastClientX: 0,
     /* 'card' or 'folder' -- decides which list the drag reorders. */
     kind: 'card',
+    /*
+     * TAP VS. DRAG, while Card Flexibility is on.
+     *
+     * startClientX/Y are where THIS press began, never updated afterwards --
+     * continueDrag compares every move against this fixed point, not the
+     * previous one, so the test is "has the finger travelled far enough from
+     * where it landed", not "did it just move a little", which would trigger
+     * on the tiny jitter a real finger or mouse always has.
+     *
+     * `moved` flips to true the first time that distance crosses
+     * DRAG_THRESHOLD_PX, and stays true for the rest of this press -- once a
+     * drag has genuinely started, letting the finger pause or drift back
+     * under the threshold must not un-arm it and let the release be read as
+     * a tap it no longer is.
+     *
+     * The floating clone/reorder-on-drag behaviour itself is UNCHANGED by
+     * this: it still begins the moment pointerdown fires, exactly as before.
+     * `moved` only decides what pointerup does afterwards -- commit the drag
+     * silently (moved) or run the normal tap action (not moved) -- it does
+     * not gate whether a drag visually starts.
+     */
+    moved: false,
+    startClientX: 0,
+    startClientY: 0,
   })
+
+  /* A real press is never pixel-perfect still; this is the smallest
+     deliberate movement before it counts as "the user meant to drag this",
+     not "the user tapped it and their finger wobbled". */
+  const DRAG_THRESHOLD_PX = 8
 
   /* Leaving rearrange mode abandons anything not saved, so the board never
      keeps showing an order the caregiver did not commit to. */
@@ -587,6 +618,47 @@ function CommunicationBoard({ childProfile, onLogOut }) {
   }, [themeId])
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  /*
+   * SETTINGS PASSWORD LOCK.
+   *
+   * `isSettingsUnlocked` is PURELY in-memory component state -- never
+   * written to localStorage/sessionStorage -- and is reset to false every
+   * time Settings closes (see the two places setIsSettingsOpen(false) is
+   * called below). That is what makes the unlock temporary: there is no
+   * stored "still unlocked" flag for a re-open to find, so every single
+   * open of Settings starts from `isSettingsUnlocked === false` and must
+   * pass the lock screen again.
+   *
+   * `hasSettingsPassword` is fetched once Settings is first opened (not on
+   * every board load) and tells the lock screen whether to ask for an
+   * existing password or offer first-time creation.
+   */
+  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false)
+  const [hasSettingsPassword, setHasSettingsPassword] = useState(null)
+
+  useEffect(() => {
+    if (!isSettingsOpen) {
+      // Cleared on close so the NEXT open never briefly shows a stale
+      // true/false from the previous visit while the fresh check is in
+      // flight -- it waits for `hasSettingsPassword !== null` instead.
+      setHasSettingsPassword(null)
+      return
+    }
+    let cancelled = false
+    fetchSettingsPasswordStatus()
+      .then((exists) => {
+        if (!cancelled) setHasSettingsPassword(exists)
+      })
+      .catch(() => {
+        /* Could not check -- default to treating one as already set, so a
+           transient failure asks for a password rather than accidentally
+           offering first-time creation on top of a real one. */
+        if (!cancelled) setHasSettingsPassword(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isSettingsOpen])
 
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
@@ -1109,6 +1181,11 @@ function CommunicationBoard({ childProfile, onLogOut }) {
     drag.pointerId = event.pointerId
     drag.lastClientX = event.clientX
     drag.lastClientY = event.clientY
+    /* Reset every press: whether THIS one turns into a drag is decided
+       fresh each time, from where THIS press started. */
+    drag.moved = false
+    drag.startClientX = event.clientX
+    drag.startClientY = event.clientY
 
     const clone = node.querySelector('.ccard')?.cloneNode(true)
     if (clone) {
@@ -1137,6 +1214,14 @@ function CommunicationBoard({ childProfile, onLogOut }) {
 
     drag.lastClientX = event.clientX
     drag.lastClientY = event.clientY
+
+    if (!drag.moved) {
+      const distance = Math.hypot(
+        event.clientX - drag.startClientX,
+        event.clientY - drag.startClientY,
+      )
+      if (distance > DRAG_THRESHOLD_PX) drag.moved = true
+    }
 
     if (drag.clone) {
       drag.clone.style.left = `${event.clientX - drag.grabX}px`
@@ -1231,6 +1316,22 @@ function CommunicationBoard({ childProfile, onLogOut }) {
    * so the merged list can emit cards and folders from one map.
    */
   function renderHomeFolder(category) {
+    /*
+     * Shared by the plain onClick below (Card Flexibility off) AND the
+     * tap-detected onPointerUp path above it (Card Flexibility on) -- one
+     * definition of "open this folder", so the two modes can never drift
+     * into announcing or opening it differently.
+     */
+    function openThisFolder() {
+      /*
+       * The folder's own displayed name -- the same string shown on
+       * the tile below, so what the child hears is exactly what they
+       * see. "Actions" says "Actions"; a renamed folder says its new
+       * name with no list to keep in step.
+       */
+      speakControlThen(category.label, () => openFolder(category.id))
+    }
+
     return (
           <div
             key={category.id}
@@ -1264,8 +1365,15 @@ function CommunicationBoard({ childProfile, onLogOut }) {
             onPointerUp={
               isMovable
                 ? () => {
+                    /*
+                     * TAP VS. DRAG -- same rule as a card: a press that never
+                     * crossed the movement threshold is a tap, so the folder
+                     * opens exactly as it would with Card Flexibility off.
+                     */
+                    const wasTap = !dragRef.current.moved
                     endDrag()
                     setDraggingId(null)
+                    if (wasTap) openThisFolder()
                   }
                 : undefined
             }
@@ -1301,19 +1409,15 @@ function CommunicationBoard({ childProfile, onLogOut }) {
             }}
             onClick={() => {
               /*
-               * While rearranging, a press MOVES the folder rather than
-               * opening it -- otherwise every drag would also navigate away
-               * from the board the caregiver is arranging. Tapping opens the
-               * folder normally the moment Card Flexibility is off.
+               * While rearranging, a PRESS THAT MOVES the folder is handled
+               * entirely by onPointerUp above, which also covers the tap
+               * case now -- so while isMovable, this plain onClick must stay
+               * a no-op, or a tap would open the folder twice (once from
+               * onPointerUp's explicit call, once from the click the browser
+               * still fires afterwards).
                */
               if (isMovable) return
-              /*
-               * The folder's own displayed name -- the same string shown on
-               * the tile below, so what the child hears is exactly what they
-               * see. "Actions" says "Actions"; a renamed folder says its new
-               * name with no list to keep in step.
-               */
-              speakControlThen(category.label, () => openFolder(category.id))
+              openThisFolder()
             }}
             aria-label={`Open ${category.label} folder`}
           >
@@ -1410,10 +1514,23 @@ function CommunicationBoard({ childProfile, onLogOut }) {
         onPointerUp={
           isMovable
             ? () => {
-                /* Nothing to commit: the order was rearranged live on every
-                   move, which is why no position has to be confirmed. */
+                /*
+                 * TAP VS. DRAG. The pointer never travelled past the
+                 * threshold, so this press was a tap, not a drag -- the card
+                 * must still speak, exactly as it would with Card Flexibility
+                 * off. Read dragRef's `moved` BEFORE endDrag() clears the
+                 * drag state, since endDrag() does not touch `moved` itself
+                 * but the id check inside handleSelectCard-adjacent code
+                 * should not rely on stale drag state either way.
+                 *
+                 * Nothing to commit for an actual drag: the order was
+                 * rearranged live on every move, which is why no position
+                 * has to be confirmed here.
+                 */
+                const wasTap = !dragRef.current.moved
                 endDrag()
                 setDraggingId(null)
+                if (wasTap) handleSelectCard(card)
               }
             : undefined
         }
@@ -2273,7 +2390,25 @@ function CommunicationBoard({ childProfile, onLogOut }) {
         <PlaceholderDialog title={dialog.title} message={dialog.message} onClose={() => setDialog(null)} />
       )}
 
-      {isSettingsOpen && (
+      {/*
+        SETTINGS PASSWORD LOCK.
+
+        Shown whenever Settings is open but not yet unlocked THIS time. Once
+        `hasSettingsPassword` is known (never null) and the correct password
+        is entered -- or a first-time one is created -- `onUnlocked` flips
+        `isSettingsUnlocked` and this swaps out for the real SettingsDialog
+        below. Closing from here (the lock's own X / Escape) closes Settings
+        entirely, exactly like closing the dialog itself.
+      */}
+      {isSettingsOpen && !isSettingsUnlocked && hasSettingsPassword !== null && (
+        <SettingsPasswordLock
+          hasSettingsPassword={hasSettingsPassword}
+          onUnlocked={() => setIsSettingsUnlocked(true)}
+          onClose={() => setIsSettingsOpen(false)}
+        />
+      )}
+
+      {isSettingsOpen && isSettingsUnlocked && (
         <SettingsDialog
           gridSize={gridSizeId}
           /*
@@ -2379,14 +2514,39 @@ function CommunicationBoard({ childProfile, onLogOut }) {
             })
           }}
           /* Settings closes as Edit Words opens, so only one panel is ever
-             on screen. */
+             on screen. Re-locks immediately, same as any other close. */
           onEditWords={() => {
             setIsSettingsOpen(false)
+            setIsSettingsUnlocked(false)
             setIsEditOpen(true)
           }}
+          /*
+           * The Account row's own display data -- who is signed in, and
+           * which child's board this is. Both are already-fetched values
+           * passed straight through (App owns `user`, this component already
+           * receives `childProfile` as a prop), not a new request.
+           */
+          userName={user?.name}
+          childName={childProfile?.childName}
+          /*
+           * Already fetched above for the lock screen; reused here so the
+           * Account row can say "Set" vs. "Change" without a second
+           * request. Refreshed after a successful set/change so the row's
+           * own label updates immediately without reopening Settings.
+           */
+          hasSettingsPassword={hasSettingsPassword}
+          onSettingsPasswordChanged={() => setHasSettingsPassword(true)}
           /* Passed straight through from App, which owns the session. */
           onLogOut={onLogOut}
-          onClose={() => setIsSettingsOpen(false)}
+          /*
+           * Closing re-locks immediately: `isSettingsUnlocked` is reset to
+           * false right here, so the very next open starts at the lock
+           * screen again, with no persisted "still unlocked" state anywhere.
+           */
+          onClose={() => {
+            setIsSettingsOpen(false)
+            setIsSettingsUnlocked(false)
+          }}
         />
       )}
 

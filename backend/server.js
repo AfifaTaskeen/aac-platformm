@@ -307,6 +307,38 @@ function createSession(res, user) {
 }
 
 /*
+ * Whether a JWT issued at `payload.iat` predates the account's most recent
+ * password change -- i.e. whether this specific token was signed BEFORE a
+ * password reset happened and must now be treated as dead.
+ *
+ * WHY THIS EXISTS
+ * ----------------
+ * A reset changes the password but, by itself, does nothing to any session
+ * that already existed: the JWT is still validly signed, still unexpired,
+ * and still names the same real user -- jwt.verify() alone cannot tell a
+ * token from before the reset apart from one issued after it. Without this
+ * check, a browser that was already signed in at the moment of the reset
+ * (the common case: someone finds "Forgot password" from the board itself,
+ * or a stale tab stays open through the whole flow) stays signed in
+ * straight through it, which is exactly the "resetting silently
+ * authenticates you" bug this exists to close.
+ *
+ * jwt.sign()'s `expiresIn` option makes the library stamp `iat` (issued-at,
+ * whole seconds since the epoch) onto every token automatically -- nothing
+ * in createSession() needed to change for this value to already be there.
+ *
+ * `passwordChangedAt` is only ever set by the password-reset route
+ * (server.js's POST /api/auth/reset-password); an account that has never
+ * reset its password has no such field, and every existing token for it
+ * stays valid exactly as before -- this can only ever invalidate a token,
+ * never do anything for an account this has never touched.
+ */
+function tokenPredatesPasswordChange(payload, user) {
+    if (!user.passwordChangedAt || typeof payload.iat !== "number") return false;
+    return payload.iat * 1000 < user.passwordChangedAt.getTime();
+}
+
+/*
  * The driver options. Unchanged from before apart from being named, so a
  * retry can build an identical client.
  */
@@ -939,16 +971,26 @@ app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (r
         );
 
         /*
-         * The link points at the app ROOT with the token as a query parameter,
-         * not at a /reset-password path. The project has no router and Vite's
-         * dev server has no SPA fallback, so a made-up path would 404 before
-         * React ever loaded. App.jsx reads ?token= on startup and shows the
-         * reset screen.
+         * The link points at a dedicated /reset-password path, so clicking it
+         * always opens the reset form specifically -- never the AAC board,
+         * even when the browser that opens it happens to already have a
+         * signed-in session (App.jsx's reset-route check runs before its
+         * signed-in check, specifically so this link always wins).
+         *
+         * Vite's own dev server AND `vite preview` both already serve
+         * index.html for any unknown path (confirmed: GET /reset-password
+         * returns 200 with the real page, not a 404) -- the project has no
+         * router, but nothing router-like is needed for one static path to
+         * fall back to index.html, which is also standard behaviour on every
+         * real static host (Vercel, Netlify, S3+CloudFront, etc.), so this
+         * requires no server/build configuration change either.
          *
          * The origin is taken from the request when it is one we already trust
          * (Vite moves between 5173/5174/5175 depending on what is free), so the
          * link always points back at the app the user is actually using. It
-         * falls back to FRONTEND_ORIGIN for requests without an Origin header.
+         * falls back to FRONTEND_ORIGIN for requests without an Origin header
+         * -- configurable per environment, so production uses the production
+         * frontend's own URL instead of a local one.
          *
          * Only allow-listed origins are used -- an attacker cannot send a
          * forged Origin header to make the link point at their own site.
@@ -958,7 +1000,7 @@ app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (r
             ? requestOrigin
             : (process.env.FRONTEND_ORIGIN || "http://localhost:5173");
 
-        const resetUrl = `${frontendUrl}/?token=${rawToken}`;
+        const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
 
         /*
          * If the email genuinely cannot be sent, say so instead of claiming
@@ -995,6 +1037,60 @@ app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (r
          * nothing about whether this one has an account -- and pretending the
          * link was sent when nothing happened is exactly the failure mode this
          * change exists to remove.
+         */
+        return res.status(500).json({
+            success: false,
+            message: "Something went wrong. Please try again."
+        });
+    }
+});
+
+/* ==========================================================================
+   GET /api/auth/reset-password/validity
+   Checks whether a reset token is still usable, WITHOUT consuming it.
+
+   WHY THIS EXISTS, SEPARATELY FROM POST /api/auth/reset-password BELOW
+   ----------------------------------------------------------------------
+   Without this, the reset page had no way to know a link was already dead
+   until the caregiver had filled in a new password and pressed the button --
+   so a second click on an already-used email link walked them through the
+   whole form only to fail at the very end. This lets the page show "this
+   link has expired or has already been used" the moment it opens instead.
+
+   READ-ONLY ON PURPOSE. It runs the exact same lookup POST /api/auth/
+   reset-password uses (hash the supplied token, require the expiry to still
+   be in the future) but never touches $unset or the password -- checking
+   validity must not spend the one use a real reset would need.
+
+   NOT AN ORACLE FOR GUESSING A TOKEN. The response is only ever
+   { valid: true } or { valid: false } -- no email, no name, no hint about
+   WHY a token is invalid (never existed vs. expired vs. already used all
+   look identical), and it is behind the same rate limiter as every other
+   auth route, so it cannot be used to brute-force a token any faster than
+   the real reset endpoint already could be.
+   ========================================================================== */
+app.get("/api/auth/reset-password/validity", authRateLimiter, requireDatabase, async (req, res) => {
+    try {
+        const { token } = req.query;
+
+        if (typeof token !== "string" || !token) {
+            return res.status(200).json({ success: true, valid: false });
+        }
+
+        const user = await users.findOne({
+            resetTokenHash: hashResetToken(token),
+            resetTokenExpiresAt: { $gt: new Date() }
+        });
+
+        return res.status(200).json({ success: true, valid: Boolean(user) });
+
+    } catch (error) {
+        console.log("Checking reset token validity failed:", error);
+        /*
+         * A genuine server fault. success:false here (distinct from
+         * valid:false) lets the frontend tell "we could not check" apart
+         * from "we checked, and it's dead" -- the first should offer a
+         * retry, the second should not.
          */
         return res.status(500).json({
             success: false,
@@ -1605,6 +1701,18 @@ app.get("/api/auth/me", async (req, res) => {
             return res.status(401).json({ success: false, message: "Not signed in." });
         }
 
+        /*
+         * The token is well-formed and names a real account, but was issued
+         * before that account's most recent password reset -- this is the
+         * "still signed in from before the reset" case. Reported the same
+         * way an expired token is: 401, "Not signed in," so the frontend's
+         * existing not-signed-in handling (drop the cookie's claim, show
+         * Sign in) is all that is needed on that side.
+         */
+        if (tokenPredatesPasswordChange(payload, user)) {
+            return res.status(401).json({ success: false, message: "Not signed in." });
+        }
+
         return res.status(200).json({
             success: true,
             user: { id: user._id, name: user.name, email: user.email }
@@ -1711,6 +1819,18 @@ async function requireAuth(req, res, next) {
             return res.status(401).json({ success: false, message: "Please sign in first." });
         }
 
+        /*
+         * Signed before this account's most recent password reset -- the
+         * same "still logged in from before the reset" case /api/auth/me
+         * checks. This is what actually protects every OTHER authenticated
+         * route (the board, cards, folders, settings, uploads...) from a
+         * stale pre-reset session, not just the one screen that happens to
+         * render the board/sign-in choice.
+         */
+        if (tokenPredatesPasswordChange(payload, user)) {
+            return res.status(401).json({ success: false, message: "Please sign in first." });
+        }
+
         req.user = user;
         next();
 
@@ -1726,6 +1846,384 @@ async function requireAuth(req, res, next) {
         });
     }
 }
+
+/* ==========================================================================
+   SETTINGS PASSWORD
+
+   A second, separate password that locks the Settings panel -- distinct from
+   the account login password above. A caregiver sets this once so a child
+   (or anyone else holding the device) cannot reach Settings and change the
+   board's behaviour, delete cards, or sign out, while the child can still use
+   the board itself freely.
+
+   It is stored exactly like the account password: only a bcrypt hash, on the
+   user document, never anything reversible. Unlocking Settings is deliberately
+   NOT remembered anywhere server-side between requests -- the frontend keeps
+   a purely in-memory "unlocked for this open panel" flag (see
+   SettingsPasswordLock.jsx) and re-locks the moment Settings closes. The
+   server's only job is to answer "does this password match", every time.
+   ========================================================================== */
+
+/*
+ * The Settings Password deliberately does NOT reuse PASSWORD_RULES /
+ * checkPasswordRules above. It locks one screen on a device a caregiver
+ * hands to their child, not an online account -- a short, all-digit code
+ * (a PIN) is what fits that: fast for a caregiver to type and recall, and
+ * simple enough that a child who doesn't yet read well can still be taught
+ * it if the caregiver chooses to. Exactly 4 characters, no composition
+ * requirement, and no "must differ from the account password" rule, since
+ * there is no longer any complexity for the two to coincidentally share.
+ */
+const SETTINGS_PASSWORD_LENGTH = 4;
+
+function checkSettingsPasswordRule(password) {
+    if (password.length !== SETTINGS_PASSWORD_LENGTH) {
+        return `Settings Password must be exactly ${SETTINGS_PASSWORD_LENGTH} characters.`;
+    }
+    return "";
+}
+
+/*
+ * A dedicated, tighter limiter for Settings Password routes.
+ *
+ * These are reachable by anyone already holding a signed-in session (the
+ * child's own device), so the attacker model is different from the main
+ * authRateLimiter above: not "a stranger guessing a stolen account's
+ * password", but "the child in front of the screen trying PINs". Fewer
+ * attempts, same 15-minute window.
+ */
+const settingsPasswordRateLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 15,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+        success: false,
+        message: "Too many attempts. Please wait a few minutes and try again."
+    }
+});
+
+const RECOVERY_CHALLENGE_MINUTES = 10;
+// Characters that cannot be confused for one another when read off a screen.
+const CAPTCHA_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+function generateCaptchaText() {
+    let text = "";
+    for (let i = 0; i < 6; i++) {
+        text += CAPTCHA_ALPHABET[crypto.randomInt(CAPTCHA_ALPHABET.length)];
+    }
+    return text;
+}
+
+/*
+ * Same idea as hashResetToken above: the raw CAPTCHA text is only ever sent
+ * to the client and compared against; the database holds just this hash, so
+ * a database dump cannot be used to answer the challenge.
+ */
+function hashCaptchaText(text) {
+    return crypto.createHash("sha256").update(text.toUpperCase().trim()).digest("hex");
+}
+
+/*
+ * GET /api/settings-password/status
+ * Whether the signed-in user has ever set a Settings Password -- the
+ * frontend uses this to show "Set Settings Password" vs. "Change Settings
+ * Password" in Account, and to decide the lock screen's own copy.
+ */
+app.get("/api/settings-password/status", requireAuth, async (req, res) => {
+    return res.status(200).json({ success: true, exists: Boolean(req.user.settingsPasswordHash) });
+});
+
+/*
+ * POST /api/settings-password/verify
+ * The lock screen's "unlock" action. Checks the submitted password against
+ * the stored hash and reports match/no-match -- it does not itself grant or
+ * record anything server-side. The frontend holds the resulting "unlocked"
+ * state in memory for as long as the Settings panel stays open, per the
+ * requirement that unlocking never persists across a close/reopen.
+ */
+app.post("/api/settings-password/verify", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
+    try {
+        const { password } = req.body;
+
+        if (typeof password !== "string" || !password) {
+            return res.status(400).json({ success: false, message: "Please enter the Settings Password." });
+        }
+
+        if (!req.user.settingsPasswordHash) {
+            return res.status(400).json({ success: false, message: "No Settings Password has been set yet." });
+        }
+
+        const matches = await bcrypt.compare(password, req.user.settingsPasswordHash);
+
+        if (!matches) {
+            return res.status(401).json({ success: false, message: "Incorrect Settings Password." });
+        }
+
+        return res.status(200).json({ success: true });
+
+    } catch (error) {
+        console.log("Settings Password verify failed:", error);
+        return res.status(500).json({ success: false, message: "Something went wrong. Please try again." });
+    }
+});
+
+/*
+ * POST /api/settings-password/set
+ * Creates the FIRST Settings Password for an account that has none yet. No
+ * current password is asked for, because there is none -- but the caller
+ * still has to be a signed-in, authenticated user (requireAuth), so this
+ * cannot be used to plant a password on someone else's account.
+ *
+ * Once one exists, this route refuses and the caller must use /change
+ * instead (or the recovery flow below), so a caregiver can never skip past
+ * an existing password by calling the "first time" route again.
+ */
+app.post("/api/settings-password/set", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
+    try {
+        if (req.user.settingsPasswordHash) {
+            return res.status(409).json({
+                success: false,
+                message: "A Settings Password already exists. Use Change Settings Password instead."
+            });
+        }
+
+        const { password, confirmPassword } = req.body;
+
+        if (typeof password !== "string" || !password) {
+            return res.status(400).json({ success: false, field: "password", message: "Please enter a password." });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ success: false, field: "confirmPassword", message: "Passwords do not match." });
+        }
+
+        const passwordProblem = checkSettingsPasswordRule(password);
+        if (passwordProblem) {
+            return res.status(400).json({ success: false, field: "password", message: passwordProblem });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+        await users.updateOne(
+            { _id: req.user._id },
+            {
+                $set: { settingsPasswordHash: hashedPassword },
+                $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "", settingsRecoveryGrantedAt: "" }
+            }
+        );
+
+        return res.status(200).json({ success: true, message: "Settings Password created." });
+
+    } catch (error) {
+        console.log("Settings Password set failed:", error);
+        return res.status(500).json({ success: false, message: "Something went wrong. Please try again." });
+    }
+});
+
+/*
+ * POST /api/settings-password/change
+ * Replaces an EXISTING Settings Password. Requires the current one, so
+ * knowing you are signed into the account is not by itself enough to change
+ * it -- matching the "Change Settings Password" step of the spec, as
+ * distinct from first-time /set and the CAPTCHA-gated recovery flow below.
+ */
+app.post("/api/settings-password/change", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
+    try {
+        if (!req.user.settingsPasswordHash) {
+            return res.status(409).json({
+                success: false,
+                message: "No Settings Password exists yet. Use Set Settings Password instead."
+            });
+        }
+
+        const { currentPassword, password, confirmPassword } = req.body;
+
+        if (typeof currentPassword !== "string" || !currentPassword) {
+            return res.status(400).json({ success: false, field: "currentPassword", message: "Please enter your current Settings Password." });
+        }
+
+        const currentMatches = await bcrypt.compare(currentPassword, req.user.settingsPasswordHash);
+        if (!currentMatches) {
+            return res.status(401).json({ success: false, field: "currentPassword", message: "Incorrect current Settings Password." });
+        }
+
+        if (typeof password !== "string" || !password) {
+            return res.status(400).json({ success: false, field: "password", message: "Please enter a new password." });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ success: false, field: "confirmPassword", message: "Passwords do not match." });
+        }
+
+        const passwordProblem = checkSettingsPasswordRule(password);
+        if (passwordProblem) {
+            return res.status(400).json({ success: false, field: "password", message: passwordProblem });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+        await users.updateOne(
+            { _id: req.user._id },
+            {
+                $set: { settingsPasswordHash: hashedPassword },
+                $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "", settingsRecoveryGrantedAt: "" }
+            }
+        );
+
+        return res.status(200).json({ success: true, message: "Settings Password changed." });
+
+    } catch (error) {
+        console.log("Settings Password change failed:", error);
+        return res.status(500).json({ success: false, message: "Something went wrong. Please try again." });
+    }
+});
+
+/*
+ * POST /api/settings-password/recovery/challenge
+ * Step 1 of "Forgot Settings Password?": issues a CAPTCHA the caller must
+ * read back correctly before being allowed to set a new Settings Password.
+ *
+ * requireAuth gates this -- the account itself must already be signed in
+ * (this is a recovery for the SECOND password, not the account login), which
+ * is also why this never asks "which account" or reveals anything about one.
+ *
+ * Only the HASH is stored; the raw text goes only in the response, mirroring
+ * the reset-token pattern used for account password resets. Single-use and
+ * short-lived: generating a new challenge immediately invalidates any
+ * earlier one for this account, and it expires on its own after
+ * RECOVERY_CHALLENGE_MINUTES even if never used.
+ */
+app.post("/api/settings-password/recovery/challenge", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
+    try {
+        const text = generateCaptchaText();
+
+        await users.updateOne(
+            { _id: req.user._id },
+            {
+                $set: {
+                    settingsRecoveryChallengeHash: hashCaptchaText(text),
+                    settingsRecoveryExpiresAt: new Date(Date.now() + RECOVERY_CHALLENGE_MINUTES * 60 * 1000)
+                },
+                $unset: { settingsRecoveryGrantedAt: "" }
+            }
+        );
+
+        return res.status(200).json({ success: true, captcha: text });
+
+    } catch (error) {
+        console.log("Settings Password recovery challenge failed:", error);
+        return res.status(500).json({ success: false, message: "Something went wrong. Please try again." });
+    }
+});
+
+/*
+ * POST /api/settings-password/recovery/verify
+ * Step 2: checks the CAPTCHA answer. On success, marks this account as
+ * "granted" recovery (a timestamp, not a password) so the follow-up
+ * /recovery/reset call can create a new Settings Password without the old
+ * one -- but ONLY within a short window and only once, since verifying also
+ * immediately clears the challenge hash, making it single-use.
+ */
+app.post("/api/settings-password/recovery/verify", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
+    try {
+        const { captcha } = req.body;
+
+        if (typeof captcha !== "string" || !captcha.trim()) {
+            return res.status(400).json({ success: false, message: "Please enter the characters shown." });
+        }
+
+        const user = await users.findOne({ _id: req.user._id });
+
+        if (
+            !user.settingsRecoveryChallengeHash ||
+            !user.settingsRecoveryExpiresAt ||
+            user.settingsRecoveryExpiresAt.getTime() < Date.now()
+        ) {
+            return res.status(400).json({ success: false, message: "This code has expired. Please request a new one." });
+        }
+
+        const matches = user.settingsRecoveryChallengeHash === hashCaptchaText(captcha);
+
+        /*
+         * Wrong or right, the challenge is consumed: a wrong guess does not
+         * get a second try against the SAME code (it must request a fresh
+         * one), which is what makes this single-use rather than merely
+         * expiring.
+         */
+        await users.updateOne(
+            { _id: req.user._id },
+            matches
+                ? { $set: { settingsRecoveryGrantedAt: new Date() }, $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "" } }
+                : { $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "" } }
+        );
+
+        if (!matches) {
+            return res.status(400).json({ success: false, message: "That code was not correct. Please try a new one." });
+        }
+
+        return res.status(200).json({ success: true });
+
+    } catch (error) {
+        console.log("Settings Password recovery verify failed:", error);
+        return res.status(500).json({ success: false, message: "Something went wrong. Please try again." });
+    }
+});
+
+/*
+ * POST /api/settings-password/recovery/reset
+ * Step 3: creates the new Settings Password, but only immediately after a
+ * successful /recovery/verify call for this same account (settingsRecovery
+ * GrantedAt set, and recent) -- never on its own. The grant is consumed here
+ * too, so it is good for exactly one new password, not an open-ended bypass.
+ */
+app.post("/api/settings-password/recovery/reset", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
+    try {
+        const user = await users.findOne({ _id: req.user._id });
+
+        if (
+            !user.settingsRecoveryGrantedAt ||
+            Date.now() - user.settingsRecoveryGrantedAt.getTime() > RECOVERY_CHALLENGE_MINUTES * 60 * 1000
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Recovery has expired. Please start over with Forgot Settings Password."
+            });
+        }
+
+        const { password, confirmPassword } = req.body;
+
+        if (typeof password !== "string" || !password) {
+            return res.status(400).json({ success: false, field: "password", message: "Please enter a new password." });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ success: false, field: "confirmPassword", message: "Passwords do not match." });
+        }
+
+        const passwordProblem = checkSettingsPasswordRule(password);
+        if (passwordProblem) {
+            return res.status(400).json({ success: false, field: "password", message: passwordProblem });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+
+        // Invalidates the old Settings Password by overwriting its hash, and consumes the grant.
+        await users.updateOne(
+            { _id: req.user._id },
+            {
+                $set: { settingsPasswordHash: hashedPassword },
+                $unset: { settingsRecoveryGrantedAt: "", settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "" }
+            }
+        );
+
+        return res.status(200).json({ success: true, message: "Settings Password created. Please enter it to continue." });
+
+    } catch (error) {
+        console.log("Settings Password recovery reset failed:", error);
+        return res.status(500).json({ success: false, message: "Something went wrong. Please try again." });
+    }
+});
 
 /* The only values these fields may hold. */
 const ALLOWED_GENDERS = ["boy", "girl", "other"];

@@ -320,16 +320,58 @@ function slugify(value) {
  * "#" and "?" are the two characters that genuinely must not survive in a
  * path, because they really do end it. encodeURI leaves both, so they are
  * escaped explicitly afterwards.
+ *
+ * OPTIONAL S3/CLOUD BASE URL -- CARD_IMAGE_BASE_URL
+ * ---------------------------------------------------
+ * Unset (the default): every card image resolves exactly as before, a
+ * root-relative "/cards/..." path served by the frontend's own
+ * frontend/public/cards/ directory. Nothing here changes the existing
+ * behaviour unless this variable is explicitly set.
+ *
+ * Set to a bucket's base URL (e.g. "https://buddytalk-media-2026.s3.
+ * ap-south-1.amazonaws.com/cards"): every newly generated imageUrl points
+ * there instead, for a deployment that serves the built-in image library
+ * from object storage rather than shipping it with the frontend build.
+ *
+ * This ONLY changes where a NEW card's imageUrl points at the moment it is
+ * generated (by scanImageLibrary()/seedBoardForChild(), or by GET
+ * /api/card-images for the picker) -- it never rewrites a value already
+ * saved on an existing card. A child seeded before this was set keeps
+ * "/cards/..." image references exactly as they always were; only a
+ * child seeded (or a picker request made) AFTER it is set gets the new
+ * base. validateMediaRef() in server.js already accepts a plain https://
+ * URL for imageUrl, so no server-side validation change was needed for
+ * this to work once set.
+ *
+ * Read ONCE at module load (mirroring how every other optional provider in
+ * this app -- Gemini, ElevenLabs, R2 -- reads its own env vars), trimmed of
+ * a trailing slash so both "...amazonaws.com/cards" and
+ * "...amazonaws.com/cards/" behave identically.
  */
+const CARD_IMAGE_BASE_URL = (process.env.CARD_IMAGE_BASE_URL || "").replace(/\/+$/, "");
+
 function toImageUrl(directoryName, fileName) {
     const relative = `${directoryName}/${fileName}`;
 
-    return (
-        "/cards/" +
-        encodeURI(relative)
-            .replace(/#/g, "%23")
-            .replace(/\?/g, "%3F")
-    );
+    /*
+     * The PATH portion is encoded exactly as before either way -- only the
+     * base differs. encodeURI is never applied to CARD_IMAGE_BASE_URL
+     * itself, which is why it is prepended after encoding rather than
+     * folded into the same encodeURI() call: running a full
+     * "https://bucket.s3.../cards" URL through encodeURI would be harmless
+     * (it leaves "://" alone) but is unnecessary, and keeping the base
+     * untouched makes it obvious in a diff that only the CONFIGURED value
+     * decides the origin, nothing computed from it.
+     */
+    const encodedPath = encodeURI(relative)
+        .replace(/#/g, "%23")
+        .replace(/\?/g, "%3F");
+
+    if (CARD_IMAGE_BASE_URL) {
+        return `${CARD_IMAGE_BASE_URL}/${encodedPath}`;
+    }
+
+    return "/cards/" + encodedPath;
 }
 
 /* ==========================================================================

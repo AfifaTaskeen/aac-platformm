@@ -34,6 +34,11 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const storage = require("../storage");
+/* sniff() is the SAME magic-byte check every live upload already goes
+   through (see uploads.js's own handleUpload()) -- reused here rather than
+   guessing a MIME type from the file's extension, which is what this
+   script used to do and got wrong (e.g. "png" instead of "image/png"). */
+const { sniff } = require("../uploads");
 
 const UPLOAD_ROOT = path.join(__dirname, "..", "uploads");
 
@@ -82,15 +87,33 @@ async function main() {
             totalFiles++;
 
             if (args.dryRun) {
-                console.log(`would migrate: ${childProfileId}/${filename}`);
+                /*
+                 * Read and sniff even in dry-run, so the printed Content-Type
+                 * is the REAL value a live run would send -- not a guess --
+                 * letting this be checked before anything is actually
+                 * written to R2.
+                 */
+                const data = await fs.readFile(path.join(dir, filename));
+                const contentType = sniff(data) || "application/octet-stream";
+                console.log(`would migrate: ${childProfileId}/${filename}  (Content-Type: ${contentType})`);
                 continue;
             }
 
             try {
                 const data = await fs.readFile(path.join(dir, filename));
-                const extension = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
 
-                await storage.put(childProfileId, filename, data, extension);
+                /*
+                 * The REAL MIME type, from the file's own bytes -- exactly
+                 * what handleUpload() already does for every live upload.
+                 * A file this script cannot recognise (sniff() returns null)
+                 * falls back to a generic binary type rather than aborting
+                 * the whole migration over one unexpected file; R2 will
+                 * still store and serve it correctly, just without a precise
+                 * Content-Type.
+                 */
+                const contentType = sniff(data) || "application/octet-stream";
+
+                await storage.put(childProfileId, filename, data, contentType);
 
                 /* Verify by reading it back before trusting the copy. */
                 const verify = await storage.get(childProfileId, filename);

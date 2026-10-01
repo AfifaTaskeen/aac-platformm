@@ -168,7 +168,23 @@
 html,
 body,
 #root {
-  height: 100%;
+  /*
+     100dvh, not 100%. A percentage here resolves against the LAYOUT
+     viewport, which on a phone with its browser UI showing is taller than
+     what is actually visible -- the exact gap .cboard's own height: 100dvh
+     already corrects for. Left at 100% here, the board's ancestors were
+     taller than the board itself and still allowed the page's own vertical
+     scroll (kept for the account/sign-in screens below, at a short viewport
+     or high zoom), so the bottom of the AAC board could sit clipped behind
+     the browser chrome until the page was scrolled to reveal it -- .cboard's
+     own overflow:hidden only ever contained ITS children, never the ancestor
+     chain's own extra height above dvh.
+
+     dvh tracks the space actually on screen and updates live as the browser
+     UI hides/returns, matching .cboard exactly, so the two can never
+     disagree again.
+  */
+  height: 100dvh;
 }
 
 body {

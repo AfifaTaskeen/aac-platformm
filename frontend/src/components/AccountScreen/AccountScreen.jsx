@@ -239,6 +239,21 @@ function AccountScreen({ onAuthenticated, onForgotPassword }) {
 
     const firstBroken = fields.find((fieldName) => nextErrors[fieldName])
     if (firstBroken) {
+      /*
+       * A mismatched confirm-password is treated specially: both password
+       * fields are cleared rather than left showing a value that is now
+       * known to be wrong (or a typo of it), so the person retypes both
+       * rather than fixing just one against a guess of what the other said.
+       */
+      if (firstBroken === 'confirmPassword') {
+        setValues((current) => ({ ...current, password: '', confirmPassword: '' }))
+        setShowPassword(false)
+        setShowConfirmPassword(false)
+        document.getElementById('password')?.focus()
+        setStatus('')
+        return
+      }
+
       // Send focus to the first problem so keyboard users are not hunting.
       document.getElementById(firstBroken)?.focus()
       setStatus('')
@@ -327,9 +342,16 @@ function AccountScreen({ onAuthenticated, onForgotPassword }) {
         Shown under the Sign in button rather than on a field, because the
         server deliberately does not say WHICH of the two was wrong -- naming
         the field would leak whether that email has an account here.
+
+        The password is cleared (email is left alone) so a wrong guess is
+        never sitting in the field for someone else to see, and so the next
+        attempt cannot be submitted by accident without being retyped.
       */
       if (response.status === 401) {
         setStatus(data?.message || 'Invalid email or password.')
+        setValues((current) => ({ ...current, password: '' }))
+        setShowPassword(false)
+        document.getElementById('password')?.focus()
         return
       }
 
@@ -524,10 +546,18 @@ function AccountScreen({ onAuthenticated, onForgotPassword }) {
     setIsSubmitting(false)
   }
 
-  /* Flips between the two views without navigating anywhere. */
+  /*
+   * Flips between the two views without navigating anywhere.
+   *
+   * Clears every field, not just the messages: a password typed on one view
+   * must never still be sitting in the field on the other, and Sign In in
+   * particular must always open with empty email/password (see the incoming
+   * requirement this now satisfies -- registration state must not carry
+   * over to Sign In).
+   */
   function switchMode() {
     setMode(isSignup ? 'signin' : 'signup')
-    // Clear the messages, but keep what was typed so switching is not punishing.
+    setValues(EMPTY_VALUES)
     setErrors({})
     setTouched({})
     setStatus('')

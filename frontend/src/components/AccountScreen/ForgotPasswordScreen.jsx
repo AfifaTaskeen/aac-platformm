@@ -62,11 +62,12 @@ function ForgotPasswordScreen({ onBackToSignIn, apiBaseUrl, emailPattern }) {
       }
 
       if (response.ok) {
+        /*
+         * The heading/subheading above (driven by isSent) now show the fixed
+         * confirmation wording directly -- nothing here needs to hold the
+         * backend's own message for display.
+         */
         setIsSent(true)
-        setStatus(
-          data?.message ||
-            'If an account exists for this email, a password reset link has been sent.',
-        )
         return
       }
 
@@ -97,10 +98,22 @@ function ForgotPasswordScreen({ onBackToSignIn, apiBaseUrl, emailPattern }) {
 
       <div className="account__body">
         <div className="account__panel account__panel--signin">
+          {/*
+            The heading itself changes once the link has been sent -- "Forgot
+            your password?" and its instructions no longer apply, and must not
+            keep showing above the confirmation (the email has already been
+            entered and submitted; asking again visually would contradict the
+            "do not ask for the email again" requirement even though the form
+            below it is already gone).
+          */}
           <div className="account__intro">
-            <h1 className="account__heading">Forgot your password?</h1>
+            <h1 className="account__heading">
+              {isSent ? 'Password reset link sent' : 'Forgot your password?'}
+            </h1>
             <p className="account__subheading">
-              Enter your email address and we&rsquo;ll send you a link to reset your password.
+              {isSent
+                ? 'If an account exists for this email, check your inbox for the password reset link.'
+                : "Enter your email address and we’ll send you a link to reset your password."}
             </p>
           </div>
 
@@ -110,14 +123,9 @@ function ForgotPasswordScreen({ onBackToSignIn, apiBaseUrl, emailPattern }) {
             screen uses to switch between its two views.
           */}
           {isSent ? (
-            <>
-              <p className="account__status" role="status" aria-live="polite">
-                {status}
-              </p>
-              <button type="button" className="account__primary" onClick={onBackToSignIn}>
-                Back to Sign in
-              </button>
-            </>
+            <button type="button" className="account__primary" onClick={onBackToSignIn}>
+              Back to Sign in
+            </button>
           ) : (
             <>
               <form className="account__form" onSubmit={handleSubmit} noValidate>

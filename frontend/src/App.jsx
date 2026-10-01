@@ -275,11 +275,35 @@ function App() {
   /*
    * Returns to Sign in and tidies the address bar, so a used reset link is not
    * left in the URL to be re-opened or shared.
+   *
+   * Also drops any `user` this tab already has in state. This matters
+   * specifically for the password-reset path: a browser that was already
+   * signed in at the moment of a reset keeps a perfectly VALID session
+   * cookie throughout it (the reset does not touch the current tab's
+   * cookie), so without this, pressing "Back to Sign in" would still find
+   * `user` set and render the board instead -- the server-side fix
+   * (requireAuth/api/auth/me now reject a token issued before the
+   * account's last password change) is what makes that old cookie actually
+   * stop working, but clearing `user` here too means the board is never
+   * even attempted from this state, and the person always has to sign in
+   * again deliberately, exactly as intended.
    */
   function backToSignIn() {
-    if (typeof window !== 'undefined' && window.location.search) {
+    /*
+     * Clears the WHOLE path, not just the query string: a reset link now
+     * opens at /reset-password?token=..., so leaving pathname alone would
+     * strand the address bar on /reset-password with no token -- refreshing
+     * that shows an empty reset form instead of sign-in.
+     */
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      window.history.replaceState({}, '', '/')
+    } else if (typeof window !== 'undefined' && window.location.search) {
       window.history.replaceState({}, '', window.location.pathname)
     }
+    setUser(null)
+    setChildProfile(null)
+    setProfileError(null)
+    setStage('checking')
     setAuthView('account')
   }
 
@@ -320,6 +344,19 @@ function App() {
    */
   if (isRestoringSession) {
     return <SplashScreen isLeaving={false} />
+  }
+
+  /*
+   * A password-reset link always wins, even for someone already signed in.
+   *
+   * Checked BEFORE the signed-in branch below on purpose: if that ran first,
+   * clicking a reset link while still signed in on this browser (the same
+   * device the family usually uses) would show the AAC board instead of the
+   * reset form -- the emailed link must open the reset screen regardless of
+   * whatever session happens to exist here.
+   */
+  if (authView === 'reset') {
+    return <ResetPasswordScreen token={resetToken} onBackToSignIn={backToSignIn} />
   }
 
   /* Signed in: decide between profile setup and the board. */
@@ -369,13 +406,12 @@ function App() {
      * The communication board. It reads gridSize and voice from the saved
      * profile -- the caregiver's choices in Child Profile are what shape it,
      * so the board never asks again and never writes back.
+     *
+     * `user` is passed through so the board's Account section can show who
+     * is signed in -- it is the SAME object /api/auth/me and sign-in already
+     * populated, not a second fetch or a new piece of data.
      */
-    return <CommunicationBoard childProfile={childProfile} onLogOut={handleLogOut} />
-  }
-
-  /* Step 2 of a password reset, reached from the emailed link. */
-  if (authView === 'reset') {
-    return <ResetPasswordScreen token={resetToken} onBackToSignIn={backToSignIn} />
+    return <CommunicationBoard childProfile={childProfile} user={user} onLogOut={handleLogOut} />
   }
 
   /* Step 1 of a password reset: ask for the email address. */

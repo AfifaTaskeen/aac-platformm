@@ -562,3 +562,51 @@ export async function saveHomeOrder(items) {
 export async function resetHomeOrder() {
   return sendJson('/api/child-profile/home-order', 'DELETE')
 }
+
+/*
+ * SETTINGS PASSWORD
+ *
+ * A second password, separate from the account login password, that locks
+ * the Settings panel. Every call here goes through sendJson, same as every
+ * other write above: the session cookie is sent, never the childProfileId,
+ * and a failure always throws with the backend's own message so the lock
+ * screen can show e.g. "Incorrect Settings Password." rather than a generic
+ * error.
+ */
+
+/* Whether this account has ever set a Settings Password. */
+export async function fetchSettingsPasswordStatus() {
+  const data = await sendJson('/api/settings-password/status', 'GET')
+  return Boolean(data.exists)
+}
+
+/* The lock screen's "Unlock" action. Throws (with the backend's message) on
+   a wrong password -- it does not itself remember anything between calls. */
+export async function verifySettingsPassword(password) {
+  return sendJson('/api/settings-password/verify', 'POST', { password })
+}
+
+/* First-time creation, when no Settings Password exists yet. */
+export async function setSettingsPassword(password, confirmPassword) {
+  return sendJson('/api/settings-password/set', 'POST', { password, confirmPassword })
+}
+
+/* Replaces an existing Settings Password; requires the current one. */
+export async function changeSettingsPassword(currentPassword, password, confirmPassword) {
+  return sendJson('/api/settings-password/change', 'POST', { currentPassword, password, confirmPassword })
+}
+
+/* Step 1 of "Forgot Settings Password?" -- returns { captcha } to display. */
+export async function requestSettingsPasswordRecoveryChallenge() {
+  return sendJson('/api/settings-password/recovery/challenge', 'POST')
+}
+
+/* Step 2: checks the CAPTCHA answer. Throws on a wrong/expired code. */
+export async function verifySettingsPasswordRecoveryCaptcha(captcha) {
+  return sendJson('/api/settings-password/recovery/verify', 'POST', { captcha })
+}
+
+/* Step 3: creates the new Settings Password after a successful CAPTCHA. */
+export async function resetSettingsPasswordViaRecovery(password, confirmPassword) {
+  return sendJson('/api/settings-password/recovery/reset', 'POST', { password, confirmPassword })
+}

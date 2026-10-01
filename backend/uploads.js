@@ -398,5 +398,10 @@ module.exports = {
     AUDIO_TYPES,
     handleUpload,
     deleteUploadedMedia,
-    deleteMediaForCards
+    deleteMediaForCards,
+    /* Exported so scripts/migrate-uploads-to-r2.js can determine each
+       existing file's real MIME type from its actual bytes -- the same way
+       every live upload already is -- rather than guessing from its
+       extension. Not used by any live route beyond handleUpload() above. */
+    sniff
 };

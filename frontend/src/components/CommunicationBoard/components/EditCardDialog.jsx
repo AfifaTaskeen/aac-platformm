@@ -174,6 +174,23 @@ function MediaField({
       ? 'image/jpeg,image/png,image/webp,image/gif'
       : 'audio/mpeg,audio/wav,audio/mp4,audio/x-m4a,audio/aac,audio/ogg,audio/webm'
 
+  /*
+   * THE CAMERA INPUT, image fields only.
+   *
+   * A SEPARATE hidden input from the one below, rather than one input whose
+   * `capture` attribute is toggled -- `capture="environment"` turned out NOT
+   * to be the inert hint the original comment here assumed: on real Android
+   * Chrome it routinely skips the gallery/files chooser entirely and opens
+   * the camera app directly, which made "Choose Image" camera-only on a
+   * phone. Two inputs, two buttons, is what actually gives a caregiver both
+   * options rather than one masquerading as the other.
+   *
+   * Declared with its own ref here (not threaded in as a second prop) so the
+   * three existing MediaField call sites in this file need no change beyond
+   * this component itself.
+   */
+  const cameraInputRef = useRef(null)
+
   return (
     <div className="cedit__field">
       <span className="cedit__label">{label}</span>
@@ -196,8 +213,29 @@ function MediaField({
             onClick={() => inputRef.current?.click()}
             disabled={disabled}
           >
-            {uploading ? 'Uploading…' : kind === 'image' ? 'Choose Image' : 'Choose Audio'}
+            {uploading
+              ? 'Uploading…'
+              : kind === 'image'
+                ? 'Choose from Gallery'
+                : 'Choose Audio'}
           </button>
+
+          {/*
+            A second, explicit button for the camera -- image fields only.
+            Desktops without a camera simply show nothing unusual when
+            pressed (the OS file dialog opens as normal, or the browser
+            ignores `capture`); nothing here assumes a camera exists.
+          */}
+          {kind === 'image' && (
+            <button
+              type="button"
+              className="cedit__btn cedit__btn--soft"
+              onClick={() => cameraInputRef.current?.click()}
+              disabled={disabled}
+            >
+              {uploading ? 'Uploading…' : 'Take Photo'}
+            </button>
+          )}
 
           {/*
             Removes the custom picture or sound, returning the card to its
@@ -246,28 +284,38 @@ function MediaField({
       </div>
 
       {/*
-        The real file picker. Hidden but still in the DOM and focusable, and
-        driven by the button above -- which is what opens the OS picker, and
-        therefore what gives access to the gallery, Files, Downloads,
-        Documents and Desktop without the app listing any of them.
-
-        `capture="environment"` (image field only) is a HINT, not a second
-        control: on a phone or tablet it makes the OS picker offer the
-        back/outward camera as one of the options alongside the gallery and
-        files, in the SAME picker -- nothing else about the flow changes, and
-        a device or browser that ignores the hint (most desktops) simply
-        shows its ordinary file picker, exactly as before. This is what keeps
-        the field a single "Choose…" button rather than adding a separate
-        camera control, matching the reasoning above.
+        The GALLERY/FILES picker. Hidden but still in the DOM and focusable,
+        driven by "Choose from Gallery"/"Choose Audio" above. No `capture`
+        attribute at all -- this is what makes it reliably open the ordinary
+        OS file picker (gallery, Files, Downloads, Documents, cloud storage)
+        rather than risk a mobile browser routing it to the camera app.
       */}
       <input
         ref={inputRef}
         type="file"
         accept={accept}
-        capture={kind === 'image' ? 'environment' : undefined}
         className="cedit__file"
         onChange={onChoose}
       />
+
+      {/*
+        The CAMERA picker -- image fields only, driven by "Take Photo" above.
+        `capture="environment"` here is no longer relied on as a soft hint
+        inside a shared input; it is the WHOLE point of this second, separate
+        input, which a caregiver reaches only by deliberately pressing "Take
+        Photo". Shares the same onChoose handler as the gallery input --
+        either one ends with a File object handled identically from there.
+      */}
+      {kind === 'image' && (
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept={accept}
+          capture="environment"
+          className="cedit__file"
+          onChange={onChoose}
+        />
+      )}
     </div>
   )
 }

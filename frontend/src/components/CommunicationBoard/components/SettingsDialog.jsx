@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import SettingsPasswordChange from './SettingsPasswordChange'
 import {
   GRID_SIZES,
   getGridSize,
@@ -69,6 +70,17 @@ function SettingsDialog({
   animation,
   onSelectAnimation,
   onEditWords,
+  userName,
+  childName,
+  /*
+   * Whether this account currently has a Settings Password -- fetched once
+   * by CommunicationBoard (the same check the lock screen uses) and passed
+   * straight through, so the Account row can say "Set" vs. "Change" without
+   * a second request, and so a password just created/changed on this screen
+   * is immediately reflected without reopening Settings.
+   */
+  hasSettingsPassword,
+  onSettingsPasswordChanged,
   onLogOut,
   onClose,
 }) {
@@ -239,6 +251,17 @@ function SettingsDialog({
   ]
 
   const openSetting = settings.find((s) => s.id === stage) || null
+  /*
+   * Account is a drill-in stage like any value-chooser above (same header/
+   * back-button behaviour), but it shows fixed account info and an action
+   * rather than a list of options -- so it is tracked separately from
+   * `openSetting` instead of being folded into the `settings` array, which
+   * assumes every entry is "a title, a current value, and a list of choices."
+   */
+  const isAccountStage = stage === 'account'
+  /* The Set/Change Settings Password form, reached from the Account row. */
+  const isSettingsPasswordStage = stage === 'settingsPassword'
+  const onAnyStage = openSetting || isAccountStage || isSettingsPasswordStage
 
   return (
     <div className="cpanel__backdrop" onClick={onClose}>
@@ -251,17 +274,17 @@ function SettingsDialog({
       >
         <header className="cpanel__head">
           {/*
-            Back on a chooser, Close on the list -- one control in one place,
-            whose meaning follows the stage.
+            Back on a chooser (or Account), Close on the list -- one control
+            in one place, whose meaning follows the stage.
           */}
           <button
             type="button"
             className="cpanel__iconbtn"
-            onClick={() => (openSetting ? setStage(null) : onClose())}
-            aria-label={openSetting ? 'Back to settings' : 'Close settings'}
+            onClick={() => (onAnyStage ? setStage(null) : onClose())}
+            aria-label={onAnyStage ? 'Back to settings' : 'Close settings'}
             ref={firstControlRef}
           >
-            {openSetting ? (
+            {onAnyStage ? (
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path
                   d="M20 12H5M12 5l-7 7 7 7"
@@ -286,12 +309,83 @@ function SettingsDialog({
           </button>
 
           <h2 className="cpanel__title" id="settings-title">
-            {openSetting ? openSetting.title : 'Settings'}
+            {isSettingsPasswordStage
+              ? hasSettingsPassword
+                ? 'Change Settings Password'
+                : 'Set Settings Password'
+              : isAccountStage
+                ? 'Account'
+                : openSetting
+                  ? openSetting.title
+                  : 'Settings'}
           </h2>
         </header>
 
         <div className="cpanel__body" ref={bodyRef}>
-          {openSetting ? (
+          {isSettingsPasswordStage ? (
+            <SettingsPasswordChange
+              hasSettingsPassword={hasSettingsPassword}
+              onDone={() => {
+                onSettingsPasswordChanged?.()
+                setStage('account')
+              }}
+              onCancel={() => setStage('account')}
+            />
+          ) : isAccountStage ? (
+            /*
+              ---------- Account ----------
+              Display-only: the signed-in user's name and the active child
+              profile's name, both already-fetched values passed in as props
+              (see CommunicationBoard.jsx) -- nothing here triggers a new
+              request or stores a second copy of either. Log Out is the one
+              action, moved in from being its own top-level row.
+            */
+            <div className="cset__account">
+              <div className="cset__account-row">
+                <span className="cset__account-label">Name</span>
+                <span className="cset__account-value">{userName || 'Signed in'}</span>
+              </div>
+              <div className="cset__account-row">
+                <span className="cset__account-label">Child</span>
+                <span className="cset__account-value">{childName || '—'}</span>
+              </div>
+
+              <button
+                type="button"
+                className="cset__row"
+                onClick={() => setStage('settingsPassword')}
+              >
+                <span className="cset__row-label">
+                  {hasSettingsPassword ? 'Change Settings Password' : 'Set Settings Password'}
+                </span>
+                <svg
+                  className="cset__row-chevron"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    d="M9 5l7 7-7 7"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+
+              {onLogOut && (
+                <button
+                  type="button"
+                  className="cset__row cset__row--logout"
+                  onClick={onLogOut}
+                >
+                  <span className="cset__row-label">Log Out</span>
+                </button>
+              )}
+            </div>
+          ) : openSetting ? (
             /* ---------- One setting's choices ---------- */
             <div className="cset__options">
               {openSetting.options.map((option) => {
@@ -380,24 +474,43 @@ function SettingsDialog({
               ))}
 
               {/*
-                Log Out closes the session for good. Like Edit Words it is an
-                ACTION rather than a value, so it sits outside the `settings`
-                array and shows no current value.
+                Account leads to who is signed in, which child this is, and
+                Log Out -- a drill-in like every setting above it rather than
+                an instant action, which is the normal shape for this kind of
+                row in a production app (Settings -> Account -> sign out),
+                and means a caregiver sees their name and child confirmed
+                before the one truly irreversible action on this screen.
 
-                Last in the list, and visually separated, because it is the
-                one row here a caregiver would not want to hit by accident --
-                everything above changes how the board looks, this ends the
-                session.
+                A plain .cset__row, not .cset__row--logout: THIS row only
+                navigates (same as Edit Words or any setting above it), it
+                does not itself end the session, so it gets a chevron and the
+                ordinary ink label rather than the danger-coloured, no-
+                chevron treatment that styling is reserved for. Log Out keeps
+                that treatment where it actually lives now, inside the
+                Account stage below.
               */}
-              {onLogOut && (
-                <button
-                  type="button"
-                  className="cset__row cset__row--logout"
-                  onClick={onLogOut}
+              <button
+                type="button"
+                className="cset__row"
+                onClick={() => setStage('account')}
+              >
+                <span className="cset__row-label">Account</span>
+                <svg
+                  className="cset__row-chevron"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  focusable="false"
                 >
-                  <span className="cset__row-label">Log Out</span>
-                </button>
-              )}
+                  <path
+                    d="M9 5l7 7-7 7"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
             </div>
           )}
         </div>
