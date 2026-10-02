@@ -70,6 +70,58 @@ import './CommunicationBoard.css'
 const FALLBACK_GRID_SIZE = 3
 
 /*
+ * SETTINGS UNLOCK SESSION.
+ *
+ * Once the Settings Password is entered correctly, Settings stays unlocked
+ * for the rest of the current browser session -- closing Settings, opening
+ * it again, navigating around inside it, and refreshing the page must NOT
+ * ask for the code again. It locks again only when:
+ *   - 30 minutes pass with no Settings activity (SETTINGS_UNLOCK_TIMEOUT_MS),
+ *   - the caregiver taps "Lock Settings" themselves, or
+ *   - the authenticated session itself ends (log out, or the server
+ *     rejects the session as expired) -- see clearSettingsUnlock() calls.
+ *
+ * Stored in sessionStorage, not localStorage: sessionStorage already clears
+ * itself when the browser tab/window is closed, which matches "unlocked for
+ * the current ... browser session" without any extra code, and it never
+ * leaks into a different tab the way localStorage would.
+ */
+const SETTINGS_UNLOCK_STORAGE_KEY = 'buddytalk.settingsUnlockedUntil'
+const SETTINGS_UNLOCK_TIMEOUT_MS = 30 * 60 * 1000
+
+function readSettingsUnlock() {
+  try {
+    const raw = window.sessionStorage.getItem(SETTINGS_UNLOCK_STORAGE_KEY)
+    const expiresAt = raw ? Number(raw) : 0
+    return Number.isFinite(expiresAt) && expiresAt > Date.now()
+  } catch {
+    return false
+  }
+}
+
+/* Called on unlock and again on any Settings activity, so the 30-minute
+   window keeps sliding forward while Settings is actually being used. */
+function extendSettingsUnlock() {
+  try {
+    window.sessionStorage.setItem(
+      SETTINGS_UNLOCK_STORAGE_KEY,
+      String(Date.now() + SETTINGS_UNLOCK_TIMEOUT_MS),
+    )
+  } catch {
+    /* sessionStorage unavailable (private mode, etc.) -- falls back to
+       asking for the Settings Password every open, which is safe. */
+  }
+}
+
+function clearSettingsUnlock() {
+  try {
+    window.sessionStorage.removeItem(SETTINGS_UNLOCK_STORAGE_KEY)
+  } catch {
+    /* Nothing stored, nothing to clear. */
+  }
+}
+
+/*
  * The key the Core Words folder is filed under.
  *
  * It matches the folder's colorKey, which is what boardApi uses as a
@@ -621,20 +673,51 @@ function CommunicationBoard({ childProfile, user, onLogOut }) {
   /*
    * SETTINGS PASSWORD LOCK.
    *
-   * `isSettingsUnlocked` is PURELY in-memory component state -- never
-   * written to localStorage/sessionStorage -- and is reset to false every
-   * time Settings closes (see the two places setIsSettingsOpen(false) is
-   * called below). That is what makes the unlock temporary: there is no
-   * stored "still unlocked" flag for a re-open to find, so every single
-   * open of Settings starts from `isSettingsUnlocked === false` and must
-   * pass the lock screen again.
+   * `isSettingsUnlocked` starts from whatever is already recorded in
+   * sessionStorage (see readSettingsUnlock/extendSettingsUnlock above), so a
+   * page refresh or a close-then-reopen within the same unlock window skips
+   * the lock screen entirely. It is NOT reset to false when Settings closes
+   * any more -- only extendSettingsUnlock() (on unlock, and on continued
+   * activity) and clearSettingsUnlock() (manual "Lock Settings", inactivity
+   * timeout, or the session ending) ever change the underlying flag.
    *
    * `hasSettingsPassword` is fetched once Settings is first opened (not on
    * every board load) and tells the lock screen whether to ask for an
    * existing password or offer first-time creation.
    */
-  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false)
+  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(readSettingsUnlock)
   const [hasSettingsPassword, setHasSettingsPassword] = useState(null)
+
+  /*
+   * INACTIVITY TIMEOUT.
+   *
+   * While Settings is open and unlocked, any interaction inside it (a click
+   * or a keypress) slides the 30-minute window forward via
+   * extendSettingsUnlock(). A plain interval then just checks whether that
+   * stored expiry has passed, and locks if so -- this is what actually
+   * re-locks an idle session rather than merely failing to extend it.
+   */
+  useEffect(() => {
+    if (!isSettingsOpen || !isSettingsUnlocked) return
+
+    function markActivity() {
+      extendSettingsUnlock()
+    }
+    window.addEventListener('pointerdown', markActivity)
+    window.addEventListener('keydown', markActivity)
+
+    const interval = setInterval(() => {
+      if (!readSettingsUnlock()) {
+        setIsSettingsUnlocked(false)
+      }
+    }, 5000)
+
+    return () => {
+      window.removeEventListener('pointerdown', markActivity)
+      window.removeEventListener('keydown', markActivity)
+      clearInterval(interval)
+    }
+  }, [isSettingsOpen, isSettingsUnlocked])
 
   useEffect(() => {
     if (!isSettingsOpen) {
@@ -2393,17 +2476,22 @@ function CommunicationBoard({ childProfile, user, onLogOut }) {
       {/*
         SETTINGS PASSWORD LOCK.
 
-        Shown whenever Settings is open but not yet unlocked THIS time. Once
-        `hasSettingsPassword` is known (never null) and the correct password
-        is entered -- or a first-time one is created -- `onUnlocked` flips
-        `isSettingsUnlocked` and this swaps out for the real SettingsDialog
-        below. Closing from here (the lock's own X / Escape) closes Settings
-        entirely, exactly like closing the dialog itself.
+        Shown whenever Settings is open and the current unlock session has
+        expired or never existed. Once `hasSettingsPassword` is known (never
+        null) and the correct password is entered -- or a first-time one is
+        created -- `onUnlocked` starts a fresh 30-minute unlock session
+        (extendSettingsUnlock) and this swaps out for the real SettingsDialog
+        below, for the rest of that session. Closing from here (the lock's
+        own X / Escape) closes Settings entirely, exactly like closing the
+        dialog itself.
       */}
       {isSettingsOpen && !isSettingsUnlocked && hasSettingsPassword !== null && (
         <SettingsPasswordLock
           hasSettingsPassword={hasSettingsPassword}
-          onUnlocked={() => setIsSettingsUnlocked(true)}
+          onUnlocked={() => {
+            extendSettingsUnlock()
+            setIsSettingsUnlocked(true)
+          }}
           onClose={() => setIsSettingsOpen(false)}
         />
       )}
@@ -2514,10 +2602,11 @@ function CommunicationBoard({ childProfile, user, onLogOut }) {
             })
           }}
           /* Settings closes as Edit Words opens, so only one panel is ever
-             on screen. Re-locks immediately, same as any other close. */
+             on screen. The unlock session stays live -- Edit Words is part
+             of the same Settings-protected area, so returning from it must
+             not ask for the Settings Password again either. */
           onEditWords={() => {
             setIsSettingsOpen(false)
-            setIsSettingsUnlocked(false)
             setIsEditOpen(true)
           }}
           /*
@@ -2536,16 +2625,34 @@ function CommunicationBoard({ childProfile, user, onLogOut }) {
            */
           hasSettingsPassword={hasSettingsPassword}
           onSettingsPasswordChanged={() => setHasSettingsPassword(true)}
-          /* Passed straight through from App, which owns the session. */
-          onLogOut={onLogOut}
           /*
-           * Closing re-locks immediately: `isSettingsUnlocked` is reset to
-           * false right here, so the very next open starts at the lock
-           * screen again, with no persisted "still unlocked" state anywhere.
+           * Logging out ends the authenticated session, so the Settings
+           * unlock must end with it -- otherwise a different caregiver
+           * signing in on the same browser within the 30-minute window
+           * would find Settings still unlocked from the previous session.
+           */
+          onLogOut={() => {
+            clearSettingsUnlock()
+            onLogOut()
+          }}
+          /*
+           * Manual lock: clears the unlock session immediately so the very
+           * next open asks for the Settings Password again, without
+           * requiring a 30-minute wait or a log out.
+           */
+          onLockSettings={() => {
+            clearSettingsUnlock()
+            setIsSettingsUnlocked(false)
+          }}
+          /*
+           * Closing Settings no longer re-locks it -- the unlock session
+           * (sessionStorage, up to 30 minutes of inactivity) is what
+           * controls locking now, not whether the dialog happens to be
+           * open. Returning to Settings later in that same window skips
+           * the lock screen.
            */
           onClose={() => {
             setIsSettingsOpen(false)
-            setIsSettingsUnlocked(false)
           }}
         />
       )}

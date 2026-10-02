@@ -82,6 +82,9 @@ function SettingsDialog({
   hasSettingsPassword,
   onSettingsPasswordChanged,
   onLogOut,
+  /* Ends the current Settings unlock session immediately, so the next
+     open of Settings asks for the Settings Password again. */
+  onLockSettings,
   onClose,
 }) {
   /*
@@ -374,6 +377,19 @@ function SettingsDialog({
                   />
                 </svg>
               </button>
+
+              {onLockSettings && (
+                <button
+                  type="button"
+                  className="cset__row"
+                  onClick={() => {
+                    onLockSettings()
+                    onClose()
+                  }}
+                >
+                  <span className="cset__row-label">Lock Settings</span>
+                </button>
+              )}
 
               {onLogOut && (
                 <button

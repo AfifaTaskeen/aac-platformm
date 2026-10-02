@@ -43,6 +43,15 @@ const SETTINGS_PASSWORD_HINT = `Settings Password must be exactly ${SETTINGS_PAS
  *   'locked'   - one exists; show the password field (default) or, via
  *                "Forgot Settings Password?", the CAPTCHA recovery flow
  *
+ * FIRST-TIME SETUP AUTO-UNLOCKS; RECOVERY DOES NOT. Saving a brand-new PIN
+ * in 'create' mode calls `onUnlocked` immediately -- the caregiver only
+ * just chose that PIN, so asking them to immediately retype it would be
+ * friction without any security upside. Creating a REPLACEMENT PIN via
+ * "Forgot Settings Password?" ('forgot-create') is unchanged: it still
+ * drops back to the normal enter-PIN screen, since that path exists
+ * specifically to confirm the caregiver, who may not be the person who just
+ * passed the CAPTCHA, actually knows the new PIN.
+ *
  * Props:
  *   hasSettingsPassword - whether one already exists (status already
  *                         fetched by the parent, so this does not re-fetch)
@@ -105,7 +114,8 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
   }
 
   /* Shared by first-time creation AND the post-recovery creation -- the two
-     only differ in which endpoint ultimately gets called. */
+     only differ in which endpoint ultimately gets called, and in what
+     happens next (see the comment at the call site below). */
   async function handleCreate(event, { viaRecovery }) {
     event.preventDefault()
     if (busy) return
@@ -116,7 +126,7 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
     }
 
     if (newPassword !== confirmPassword) {
-      setError('Passwords do not match.')
+      setError('PINs do not match.')
       return
     }
 
@@ -125,27 +135,34 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
     try {
       if (viaRecovery) {
         await resetSettingsPasswordViaRecovery(newPassword, confirmPassword)
+        /*
+         * Recovery is unchanged by this feature: creating a new PIN after
+         * "Forgot Settings Password?" still drops back to the enter-PIN
+         * screen, exactly as before. Only genuine FIRST-TIME setup (no PIN
+         * ever existed) auto-unlocks -- see the plain `setSettingsPassword`
+         * branch below.
+         */
+        setNewPassword('')
+        setConfirmPassword('')
+        setPasswordValue('')
+        setError('')
+        setConfirmationNote('New Settings Password created. Please enter it to continue.')
+        setMode('password')
       } else {
         await setSettingsPassword(newPassword, confirmPassword)
+        /*
+         * First-time setup only: the caregiver just chose this PIN a moment
+         * ago, so re-asking for it immediately would be pure friction with
+         * no security benefit -- unlock straight away, same as a correct
+         * entry on the normal unlock screen.
+         */
+        setNewPassword('')
+        setConfirmPassword('')
+        setError('')
+        onUnlocked()
       }
-      /*
-       * Per the spec, creating/recovering a password does NOT itself unlock
-       * Settings -- the caller must enter the new password, same as any
-       * other lock-screen visit. Dropping back to 'password' mode (clearing
-       * the fields) accomplishes that without a second round trip.
-       */
-      setNewPassword('')
-      setConfirmPassword('')
-      setPasswordValue('')
-      setError('')
-      setConfirmationNote(
-        viaRecovery
-          ? 'New Settings Password created. Please enter it to continue.'
-          : 'Settings Password created. Please enter it to continue.',
-      )
-      setMode('password')
     } catch (err) {
-      setError(err.message || 'Could not save that password. Please try again.')
+      setError(err.message || 'Could not save that PIN. Please try again.')
     } finally {
       setBusy(false)
     }
@@ -218,7 +235,7 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
 
           <h2 className="cpanel__title" id="settings-lock-title">
             {mode === 'create'
-              ? 'Set Settings Password'
+              ? 'Set your Settings PIN'
               : mode === 'forgot-captcha'
                 ? "Verify it's you"
                 : mode === 'forgot-create'
@@ -233,8 +250,15 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
           </div>
 
           {mode === 'password' && (
+            /*
+             * Kept deliberately minimal, per the simplified-lock-UI
+             * requirement: one short sentence, the code field, and the
+             * Unlock button. "Forgot Settings Password?" stays as a small
+             * secondary link below -- it is existing recovery functionality,
+             * not part of the primary lock form this was asked to trim.
+             */
             <form className="cslock__form" onSubmit={handleUnlock}>
-              <p className="cslock__intro">Enter the Settings Password to continue.</p>
+              <p className="cslock__intro">Enter your Settings Password to continue.</p>
 
               {confirmationNote && (
                 <p className="cslock__note" role="status">
@@ -242,20 +266,20 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
                 </p>
               )}
 
-              <label className="cedit__field">
-                <span className="cedit__label">Settings Password</span>
-                <input
-                  ref={firstFieldRef}
-                  className="cedit__input"
-                  type="password"
-                  autoComplete="off"
-                  value={password}
-                  onChange={(event) => {
-                    setPasswordValue(event.target.value)
-                    if (error) setError('')
-                  }}
-                />
-              </label>
+              <input
+                ref={firstFieldRef}
+                className="cedit__input"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={SETTINGS_PASSWORD_LENGTH}
+                aria-label="Settings Password"
+                value={password}
+                onChange={(event) => {
+                  setPasswordValue(event.target.value)
+                  if (error) setError('')
+                }}
+              />
 
               {error && <p className="cedit__error" role="alert">{error}</p>}
 
@@ -277,14 +301,20 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
           )}
 
           {mode === 'create' && (
+            /*
+             * First-time setup only (hasSettingsPassword was false). Kept
+             * compact, matching the simplified unlock form: a one-line
+             * explanation, the two PIN fields, and a single Save button.
+             * Submitting unlocks immediately -- see handleCreate above.
+             */
             <form className="cslock__form" onSubmit={(event) => handleCreate(event, { viaRecovery: false })}>
               <p className="cslock__intro">
-                Create a Settings Password to lock the Settings panel. This is separate from
+                Choose a 4-character PIN to lock the Settings panel. This is separate from
                 your account login password.
               </p>
 
               <label className="cedit__field">
-                <span className="cedit__label">New Settings Password</span>
+                <span className="cedit__label">Create PIN</span>
                 <input
                   ref={firstFieldRef}
                   className="cedit__input"
@@ -301,7 +331,7 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
               </label>
 
               <label className="cedit__field">
-                <span className="cedit__label">Confirm Settings Password</span>
+                <span className="cedit__label">Confirm PIN</span>
                 <input
                   className="cedit__input"
                   type="password"
@@ -322,7 +352,7 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
 
               <div className="cedit__actions">
                 <button type="submit" className="cedit__btn cedit__btn--save" disabled={busy}>
-                  {busy ? 'Saving…' : 'Set Password'}
+                  {busy ? 'Saving…' : 'Save'}
                 </button>
               </div>
             </form>
