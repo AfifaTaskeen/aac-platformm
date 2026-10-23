@@ -22,6 +22,31 @@ const storage = require("./storage");
 const app = express();
 
 /*
+ * TRUST PROXY.
+ *
+ * Every real deployment host (Render, Railway, Fly.io, etc.) sits this
+ * server behind one reverse proxy. Express's default (false) treats the
+ * proxy's own connection as the request's source, so req.ip and the
+ * X-Forwarded-For header -- what express-rate-limit keys its counters on --
+ * are wrong: every visitor looks like they share the proxy's single IP,
+ * which makes the rate limiter either lock everyone out together or (since
+ * recent express-rate-limit versions refuse to trust a spoofable header by
+ * default) throw on startup.
+ *
+ * `1` means "trust exactly one hop" -- the immediate proxy in front of this
+ * process, which is the correct value for a single-reverse-proxy platform.
+ * It does NOT need changing for local development: with no proxy in front
+ * of it at all, there is nothing for this setting to do.
+ *
+ * Only a small, explicit NODE_ENV condition rather than always-on, because
+ * trusting a forwarded-for header is only correct when something trustworthy
+ * (the hosting platform's own proxy) is actually the one setting it.
+ */
+if (process.env.NODE_ENV === "production") {
+    app.set("trust proxy", 1);
+}
+
+/*
  * Which frontend addresses may call this API.
  *
  * Vite picks the next free port when its usual one is taken, so the React app
@@ -721,6 +746,17 @@ function startServer() {
     const httpServer = app.listen(PORT, () => {
         console.log(`Server listening on http://localhost:${PORT}`);
         console.log(`Health check: http://localhost:${PORT}/health`);
+        /*
+         * Prints which backend caregiver uploads will actually use, so a
+         * deployment with a missing/misspelled credential is obvious at
+         * startup instead of only showing up later as uploads silently
+         * landing on local disk (which does not survive a redeploy).
+         */
+        if (storage.isConfigured()) {
+            console.log(`Uploads: cloud storage active (${storage.activeProviderName()})`);
+        } else {
+            console.log("Uploads: no cloud storage configured -- saving to local disk.");
+        }
     });
 
     // Runs alongside the server rather than gating it.
