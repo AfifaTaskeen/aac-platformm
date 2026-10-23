@@ -2636,15 +2636,6 @@ function CommunicationBoard({ childProfile, user, onLogOut }) {
             onLogOut()
           }}
           /*
-           * Manual lock: clears the unlock session immediately so the very
-           * next open asks for the Settings Password again, without
-           * requiring a 30-minute wait or a log out.
-           */
-          onLockSettings={() => {
-            clearSettingsUnlock()
-            setIsSettingsUnlocked(false)
-          }}
-          /*
            * Closing Settings no longer re-locks it -- the unlock session
            * (sessionStorage, up to 30 minutes of inactivity) is what
            * controls locking now, not whether the dialog happens to be

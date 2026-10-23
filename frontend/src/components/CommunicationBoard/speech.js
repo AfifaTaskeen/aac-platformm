@@ -273,15 +273,16 @@ export function speakText(text, options = {}) {
    * Slower than default, because the listener may still be learning these
    * words and a measured pace is easier to follow.
    *
-   * 0.85 rather than the previous 0.95: noticeably calmer, while staying well
-   * clear of the drawl that sets in below about 0.7, where the synthesiser
-   * stretches vowels and words start to sound slurred rather than clear.
+   * 0.72 rather than the previous 0.85: noticeably slower again, while
+   * staying just above the drawl that sets in below about 0.7, where the
+   * synthesiser stretches vowels and words start to sound slurred rather
+   * than clear.
    *
    * Set here, in the one place every utterance passes through, so the pace is
    * identical for card words, whole sentences, and the spoken control labels.
    * Pitch is deliberately left at its natural 1.
    */
-  utterance.rate = 0.85
+  utterance.rate = 0.72
   utterance.pitch = 1
 
   /*
