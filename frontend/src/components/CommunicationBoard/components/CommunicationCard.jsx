@@ -131,12 +131,15 @@ function CommunicationCard({ card, onSelect, isCore = false, animate = true }) {
         </span>
       )}
 
-      {/* The photo failed to load: show the emoji so the card is still
-          recognisable at a glance instead of becoming word-only. */}
-      {!showImage && card.emoji && (
+      {/* No picture loaded (missing card.image, or the photo failed to
+          load): always show some symbol -- the card's own emoji if it has
+          one, otherwise a generic placeholder -- so a card never falls back
+          to word-only. An AAC card the child can't recognise at a glance is
+          as unusable as a blank one. */}
+      {!showImage && (
         <span className="ccard__imagebox ccard__imagebox--emoji">
           <span className="ccard__emoji" aria-hidden="true">
-            {card.emoji}
+            {card.emoji || '🖼️'}
           </span>
         </span>
       )}
