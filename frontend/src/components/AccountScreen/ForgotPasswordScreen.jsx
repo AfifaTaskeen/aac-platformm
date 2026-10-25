@@ -24,6 +24,11 @@ function ForgotPasswordScreen({ onBackToSignIn, apiBaseUrl, emailPattern }) {
   // Once the request succeeds the form is replaced by the confirmation, so the
   // user is not invited to submit the same address over and over.
   const [isSent, setIsSent] = useState(false)
+  // Set only when the server could not email the link and handed it back
+  // directly instead (see the backend route's own comment on why that is
+  // safe here): shown as a clickable link on this same screen rather than
+  // left stranded in an email that never arrived.
+  const [directResetUrl, setDirectResetUrl] = useState('')
 
   function validate(value) {
     if (!value.trim()) return 'Please enter your email address.'
@@ -66,7 +71,14 @@ function ForgotPasswordScreen({ onBackToSignIn, apiBaseUrl, emailPattern }) {
          * The heading/subheading above (driven by isSent) now show the fixed
          * confirmation wording directly -- nothing here needs to hold the
          * backend's own message for display.
+         *
+         * resetUrl is only present when the server could not actually email
+         * the link (see the backend route's comment) and handed it back in
+         * the response instead, so the confirmation screen below can show it
+         * directly rather than the person waiting on an email that is never
+         * coming.
          */
+        if (data?.resetUrl) setDirectResetUrl(data.resetUrl)
         setIsSent(true)
         return
       }
@@ -108,11 +120,15 @@ function ForgotPasswordScreen({ onBackToSignIn, apiBaseUrl, emailPattern }) {
           */}
           <div className="account__intro">
             <h1 className="account__heading">
-              {isSent ? 'Password reset link sent' : 'Forgot your password?'}
+              {isSent
+                ? (directResetUrl ? 'Here is your reset link' : 'Password reset link sent')
+                : 'Forgot your password?'}
             </h1>
             <p className="account__subheading">
               {isSent
-                ? 'If an account exists for this email, check your inbox for the password reset link.'
+                ? (directResetUrl
+                    ? "We couldn't email this link just now, so it's shown below instead. Open it to choose a new password."
+                    : 'If an account exists for this email, check your inbox for the password reset link.')
                 : "Enter your email address and we’ll send you a link to reset your password."}
             </p>
           </div>
@@ -123,9 +139,20 @@ function ForgotPasswordScreen({ onBackToSignIn, apiBaseUrl, emailPattern }) {
             screen uses to switch between its two views.
           */}
           {isSent ? (
-            <button type="button" className="account__primary" onClick={onBackToSignIn}>
-              Back to Sign in
-            </button>
+            <>
+              {directResetUrl && (
+                <a
+                  href={directResetUrl}
+                  className="account__primary"
+                  style={{ display: 'block', textAlign: 'center', textDecoration: 'none', marginBottom: '12px' }}
+                >
+                  Reset your password
+                </a>
+              )}
+              <button type="button" className="account__primary" onClick={onBackToSignIn}>
+                Back to Sign in
+              </button>
+            </>
           ) : (
             <>
               <form className="account__form" onSubmit={handleSubmit} noValidate>

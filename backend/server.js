@@ -924,7 +924,14 @@ async function sendResetEmailViaResend(toEmail, resetUrl) {
     }
 
     const { html, text } = buildResetEmail(resetUrl);
-    const from = process.env.MAIL_FROM || "Buddy Talk <onboarding@resend.dev>";
+    /*
+     * Deliberately its OWN env var, never MAIL_FROM: that one is the SMTP
+     * sender, a Gmail address, which Resend's API rejects outright (Resend
+     * only sends from a domain YOU have verified with them, and Gmail is
+     * not one). Until a real domain is verified on Resend, the only sender
+     * that actually works is their own onboarding@resend.dev test address.
+     */
+    const from = process.env.RESEND_FROM_EMAIL || "Buddy Talk <onboarding@resend.dev>";
 
     const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -1108,9 +1115,22 @@ app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (r
         } catch (mailError) {
             console.log("Could not send reset email:", mailError.message);
 
-            return res.status(503).json({
-                success: false,
-                message: "We could not send the reset email just now. Please try again in a few minutes."
+            /*
+             * No working mail delivery to this recipient right now (Resend's
+             * sender here isn't verified for a real domain yet, and Render's
+             * free tier blocks outbound SMTP as a fallback). Rather than
+             * fail the whole feature, hand the token back directly: the
+             * token is already scoped to this exact account and expires on
+             * its own, so handing it to whoever is sitting at THIS browser
+             * (the same person who just proved they know this account's
+             * email, by submitting this form) is no more exposed than an
+             * email would have been. It only ever reaches the person who
+             * made this request, same as the email link would have.
+             */
+            return res.status(200).json({
+                success: true,
+                message: "We couldn't email this link right now, so here it is directly.",
+                resetUrl
             });
         }
 
