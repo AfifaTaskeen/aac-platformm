@@ -38,16 +38,26 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
  * available, so it is a best effort by design -- hence the fallback below.
  */
 const FEMALE_HINTS = ['female', 'zira', 'susan', 'samantha', 'victoria', 'karen', 'moira', 'tessa', 'fiona', 'hazel', 'catherine', 'linda', 'heera', 'aria', 'jenny', 'michelle', 'eva', 'sonia']
-const MALE_HINTS = ['male', 'david', 'mark', 'george', 'james', 'daniel', 'alex', 'fred', 'ravi', 'guy', 'brian', 'christopher', 'eric', 'roger', 'thomas']
+const MALE_HINTS = ['male', 'david', 'mark', 'george', 'james', 'daniel', 'alex', 'fred', 'ravi', 'guy', 'brian', 'christopher', 'eric', 'roger', 'thomas', 'matthew', 'joey', 'justin', 'kevin', 'rishi', 'neerja']
 
+/*
+ * Checked against BOTH the human-readable name and the voiceURI: desktop
+ * voices (Windows/macOS) put the gender-revealing name where a caregiver can
+ * read it, but Android/Chrome's on-device voices are frequently coded
+ * identifiers like "en-us-x-sfg#male_1-local" -- no readable name at all,
+ * with "male"/"female" sitting only in the voiceURI. Skipping voiceURI here
+ * is exactly why a phone running Chrome can have a genuinely male voice
+ * installed and still never be selected.
+ */
 function looksLike(voice, hints) {
   const name = (voice.name || '').toLowerCase()
+  const uri = (voice.voiceURI || '').toLowerCase()
   /*
    * "female" contains "male" as a substring, so a plain includes() check
-   * would label every female voice male. Checked explicitly.
+   * would label every female voice male. Checked explicitly, on both fields.
    */
-  if (hints === MALE_HINTS && name.includes('female')) return false
-  return hints.some((hint) => name.includes(hint))
+  if (hints === MALE_HINTS && (name.includes('female') || uri.includes('female'))) return false
+  return hints.some((hint) => name.includes(hint) || uri.includes(hint))
 }
 
 /*
