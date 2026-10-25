@@ -905,15 +905,66 @@ function buildResetEmail(resetUrl) {
 }
 
 /*
+ * Sends the reset email via Resend's HTTP API.
+ *
+ * Added alongside SMTP (not instead of it) because raw SMTP connections are
+ * blocked outbound on Render's free tier -- nodemailer's sendMail() there
+ * doesn't fail fast, it hangs for minutes until the platform's own timeout
+ * kills it, which is exactly the "We could not send the reset email" /
+ * 2-minute-hang bug this was added to fix. Resend sends over a normal HTTPS
+ * POST, so it isn't affected by a host blocking the SMTP port.
+ *
+ * Returns null (not configured, caller falls through to SMTP) or throws if
+ * the send genuinely failed -- same throwing contract as the SMTP path below,
+ * for the same reason: silently swallowing a failure is the bug being fixed.
+ */
+async function sendResetEmailViaResend(toEmail, resetUrl) {
+    if (!process.env.RESEND_API_KEY) {
+        return null;
+    }
+
+    const { html, text } = buildResetEmail(resetUrl);
+    const from = process.env.MAIL_FROM || "Buddy Talk <onboarding@resend.dev>";
+
+    const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            from,
+            to: toEmail,
+            subject: "Reset your Buddy Talk password",
+            text,
+            html
+        })
+    });
+
+    if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Resend API responded ${response.status}: ${body}`);
+    }
+
+    const data = await response.json();
+    console.log(`Password reset email sent to ${toEmail} via Resend (id ${data.id})`);
+    return "sent";
+}
+
+/*
  * Sends the reset email.
  *
- * Returns "sent", "logged" (no SMTP configured -- link printed to the console
- * for local development) or throws if the send genuinely failed.
+ * Tries Resend first (see above), then falls back to SMTP, then falls back to
+ * logging the link to the console for local development. Returns "sent",
+ * "logged", or throws if a configured provider genuinely failed to send.
  *
  * Throwing matters: silently swallowing a failure produced exactly the bug
  * being fixed here, where the UI reported success and no email ever arrived.
  */
 async function sendResetEmail(toEmail, resetUrl) {
+    const viaResend = await sendResetEmailViaResend(toEmail, resetUrl);
+    if (viaResend) return viaResend;
+
     const transport = createMailTransport();
 
     if (!transport) {
