@@ -596,17 +596,21 @@ export async function changeSettingsPassword(currentPassword, password, confirmP
   return sendJson('/api/settings-password/change', 'POST', { currentPassword, password, confirmPassword })
 }
 
-/* Step 1 of "Forgot Settings Password?" -- returns { captcha } to display. */
+/* Step 1 of "Forgot Settings Password?" -- asks the server how this account
+   proves it is the owner. Returns { method: 'account-password' } or
+   { method: 'email-code', emailHint }. It NEVER returns a code to display. */
 export async function requestSettingsPasswordRecoveryChallenge() {
   return sendJson('/api/settings-password/recovery/challenge', 'POST')
 }
 
-/* Step 2: checks the CAPTCHA answer. Throws on a wrong/expired code. */
-export async function verifySettingsPasswordRecoveryCaptcha(captcha) {
-  return sendJson('/api/settings-password/recovery/verify', 'POST', { captcha })
+/* Step 2: proves ownership. Pass { accountPassword } for accounts with a
+   password, or { code } (the 6-digit emailed code) for Google-only accounts.
+   Throws with the server's message when it is wrong or expired. */
+export async function verifySettingsPasswordRecovery({ accountPassword, code }) {
+  return sendJson('/api/settings-password/recovery/verify', 'POST', { accountPassword, code })
 }
 
-/* Step 3: creates the new Settings Password after a successful CAPTCHA. */
+/* Step 3: creates the new Settings Password after step 2 succeeded. */
 export async function resetSettingsPasswordViaRecovery(password, confirmPassword) {
   return sendJson('/api/settings-password/recovery/reset', 'POST', { password, confirmPassword })
 }

@@ -311,8 +311,68 @@ async function handleUpload(req, kind, childProfileId) {
         throw error;
     }
 
-    const url = await save(kind, childProfileId, file.data, sniffed);
-    return { url, bytes: file.data.length, type: sniffed };
+    /*
+     * SECURITY/PRIVACY FIX (M-2): pictures are re-saved through sharp, which
+     * strips the hidden metadata (GPS location, phone model, timestamps) and
+     * shrinks big photos. Audio is stored exactly as before.
+     */
+    const data = kind === "image" ? await sanitizeImage(file.data, sniffed) : file.data;
+
+    const url = await save(kind, childProfileId, data, sniffed);
+    return { url, bytes: data.length, type: sniffed };
+}
+
+/* The longest side a stored picture may have. A card is shown a few hundred
+   pixels wide, so 1200 is already generous and keeps phone photos small. */
+const MAX_IMAGE_SIDE = 1200;
+
+/*
+ * Re-encodes an uploaded picture so it carries NO hidden metadata.
+ *
+ *  - sharp drops all metadata (EXIF, GPS, XMP, ICC...) when it writes a new
+ *    file, unless told to keep it -- and nothing here tells it to.
+ *  - .rotate() with no argument first APPLIES the photo's "which way is up"
+ *    flag, then discards it, so a portrait phone photo is not left sideways
+ *    after the flag is gone.
+ *  - Longest side is capped at MAX_IMAGE_SIDE, never enlarged.
+ *  - The same format goes back out (JPEG stays JPEG, etc.), so the file name
+ *    ending and type the rest of the app expects do not change.
+ *  - If the bytes cannot be decoded as a real picture, the upload is refused
+ *    exactly like a wrong file type. That also rejects files that merely
+ *    START like a JPEG but contain something else.
+ *  - limitInputPixels stops a tiny file that unpacks into a gigantic image
+ *    (a "decompression bomb") from eating the server's memory.
+ */
+async function sanitizeImage(data, type) {
+    const sharp = require("sharp");
+
+    try {
+        let pipeline = sharp(data, {
+            failOn: "error",
+            limitInputPixels: 50 * 1000 * 1000,
+            animated: type === "image/gif"
+        })
+            .rotate()
+            .resize({
+                width: MAX_IMAGE_SIDE,
+                height: MAX_IMAGE_SIDE,
+                fit: "inside",
+                withoutEnlargement: true
+            });
+
+        if (type === "image/jpeg") pipeline = pipeline.jpeg({ quality: 85 });
+        else if (type === "image/png") pipeline = pipeline.png();
+        else if (type === "image/webp") pipeline = pipeline.webp({ quality: 85 });
+        else if (type === "image/gif") pipeline = pipeline.gif();
+        else throw new Error("unexpected image type " + type);
+
+        return await pipeline.toBuffer();
+    } catch (cause) {
+        console.log("Upload rejected: could not read it as a real picture:", cause.message);
+        const error = new Error("UNSUPPORTED_TYPE");
+        error.code = "UNSUPPORTED_TYPE";
+        throw error;
+    }
 }
 
 /*

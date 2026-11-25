@@ -50,6 +50,7 @@ require("dotenv").config();
 const path = require("path");
 const fsSync = require("fs");
 const { MongoClient } = require("mongodb");
+const { requireDbName } = require("./dbName");
 
 const {
     scanImageLibrary,
@@ -245,11 +246,15 @@ async function main() {
         process.exit(1);
     }
 
+    // Refuses to run at all unless MONGODB_DB is set (see dbName.js).
+    const DB_NAME = requireDbName("syncDefaultCards.js");
+
     const client = new MongoClient(process.env.MONGODB_URI);
     await client.connect();
 
     try {
-        const db = client.db("BuddyTalk");
+        const db = client.db(DB_NAME);
+        console.log(`Database: ${DB_NAME}`);
         const collections = {
             folders: db.collection("folders"),
             cards: db.collection("cards")

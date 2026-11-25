@@ -18,6 +18,14 @@ const { seedBoardForChild, ORDER_STEP, toImageUrl, CARD_IMAGE_ROOT } = require("
 const uploads = require("./uploads");
 /* Where an upload's BYTES actually live -- local disk or Cloudflare R2. */
 const storage = require("./storage");
+/* Which MongoDB database to use (MONGODB_DB) -- see dbName.js. */
+const { requireDbName } = require("./dbName");
+
+/*
+ * Read once, at startup. If MONGODB_DB is missing the server stops right here
+ * with a message, instead of quietly using some default database.
+ */
+const DB_NAME = requireDbName("The server");
 
 const app = express();
 
@@ -233,16 +241,48 @@ app.use(cookieParser());
  * sent, not the older X-RateLimit-* ones, since nothing here depends on
  * the legacy shape.
  */
-const authRateLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 20,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: {
-        success: false,
-        message: "Too many attempts. Please wait a few minutes and try again."
-    }
-});
+/*
+ * SEPARATE LIMIT FOR EACH SENSITIVE ROUTE (L-2).
+ *
+ * These used to share ONE counter (20 tries per 15 minutes per address for
+ * login + sign-up + forgot + reset + Google together). So twenty failed logins
+ * -- or a few people signing up from the same school Wi-Fi -- also blocked
+ * every other route, and a correct password was refused too.
+ *
+ * Now each route has its own counter, sized for what it does:
+ *
+ *   login            20 FAILED tries / 15 min. Correct logins are not counted
+ *                    at all (skipSuccessfulRequests), so a family signing in
+ *                    again and again never uses up the allowance.
+ *   sign-up          20 / 15 min -- sign-ups from a shared network are normal.
+ *   forgot-password  10 / 15 min -- every accepted request sends an email, so
+ *                    this is the one that stops inbox-flooding.
+ *   reset-password   20 / 15 min -- the "is this link still valid?" check and
+ *                    the actual reset share this one counter (same flow).
+ *   Google sign-in   20 FAILED tries / 15 min.
+ *
+ * All are still keyed by the visitor's address, and still reset when the
+ * server restarts (the counters live in the server's memory).
+ */
+function makeRateLimiter({ limit, skipSuccessfulRequests = false }) {
+    return rateLimit({
+        windowMs: 15 * 60 * 1000,
+        limit,
+        skipSuccessfulRequests,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: {
+            success: false,
+            message: "Too many attempts. Please wait a few minutes and try again."
+        }
+    });
+}
+
+const loginRateLimiter = makeRateLimiter({ limit: 20, skipSuccessfulRequests: true });
+const registerRateLimiter = makeRateLimiter({ limit: 20 });
+const forgotPasswordRateLimiter = makeRateLimiter({ limit: 10 });
+const resetPasswordRateLimiter = makeRateLimiter({ limit: 20 });
+const googleRateLimiter = makeRateLimiter({ limit: 20, skipSuccessfulRequests: true });
 
 /*
  * UPLOADED MEDIA IS SERVED FURTHER DOWN, BEHIND AUTHENTICATION.
@@ -320,7 +360,14 @@ function createSession(res, user) {
     const token = jwt.sign(
         // The "payload" -- deliberately tiny. Never put secrets in here; a JWT
         // is signed so it cannot be TAMPERED with, but anyone can READ it.
-        { userId: user._id.toString() },
+        /*
+         * `tv` = the user's tokenVersion at the moment of sign-in. Logging
+         * out raises the number stored on the user, which instantly makes
+         * every token carrying the old number worthless (see
+         * sessionWasRevoked below). A user who has never logged out has no
+         * tokenVersion yet, which counts as 0.
+         */
+        { userId: user._id.toString(), tv: user.tokenVersion || 0 },
         process.env.JWT_SECRET,
         { expiresIn: `${SESSION_DAYS}d` }
     );
@@ -361,6 +408,26 @@ function createSession(res, user) {
 function tokenPredatesPasswordChange(payload, user) {
     if (!user.passwordChangedAt || typeof payload.iat !== "number") return false;
     return payload.iat * 1000 < user.passwordChangedAt.getTime();
+}
+
+/*
+ * SECURITY FIX (M-4): has this token been cancelled by a logout?
+ *
+ * A JWT is valid until it expires (7 days) no matter what the browser does,
+ * so clearing the cookie on logout only removed OUR copy -- anyone who had
+ * copied the cookie could keep using it. Now POST /api/auth/logout adds 1 to
+ * the user's `tokenVersion`, and a token only counts if the version inside it
+ * still matches the one stored on the user.
+ *
+ * Tokens issued before this change have no `tv`; they count as version 0, so
+ * nobody is suddenly signed out when this is deployed -- they simply become
+ * cancellable from their next logout.
+ *
+ * Side effect to know about: the version is per USER, so logging out on one
+ * device signs that account out on every device ("log out everywhere").
+ */
+function sessionWasRevoked(payload, user) {
+    return (payload.tv || 0) !== (user.tokenVersion || 0);
 }
 
 /*
@@ -538,7 +605,8 @@ async function connectDB() {
 
         console.log("MongoDB connected successfully");
 
-        const db = client.db("BuddyTalk");
+        const db = client.db(DB_NAME);
+        console.log(`Using database: ${DB_NAME}`);
         users = db.collection("users");
         childProfiles = db.collection("childProfiles");
         /*
@@ -975,7 +1043,16 @@ async function sendResetEmail(toEmail, resetUrl) {
     const transport = createMailTransport();
 
     if (!transport) {
-        console.log("\n=== PASSWORD RESET (no SMTP configured) ===");
+        /*
+         * SECURITY FIX (C-1): a reset link is a password. Printing it to the
+         * server log is only acceptable on a developer's own machine. In
+         * production, anyone who can read the hosting dashboard's logs could
+         * take over accounts, so refuse: the caller logs the failure instead.
+         */
+        if (IS_PRODUCTION) {
+            throw new Error("No email provider is configured (set RESEND_API_KEY or SMTP_HOST/SMTP_USER/SMTP_PASS).");
+        }
+        console.log("\n=== PASSWORD RESET (no SMTP configured -- development only) ===");
         console.log(`  to:   ${toEmail}`);
         console.log(`  link: ${resetUrl}`);
         console.log(`  expires in ${RESET_TOKEN_MINUTES} minutes`);
@@ -1012,7 +1089,7 @@ async function sendResetEmail(toEmail, resetUrl) {
    has an account. Confirming which emails are registered would let anyone
    discover who uses Buddy Talk one address at a time.
    ========================================================================== */
-app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (req, res) => {
+app.post("/api/auth/forgot-password", forgotPasswordRateLimiter, requireDatabase, async (req, res) => {
     // One message for every outcome, defined once so no branch can differ.
     const genericResponse = {
         success: true,
@@ -1097,42 +1174,29 @@ app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (r
         const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
 
         /*
-         * If the email genuinely cannot be sent, say so instead of claiming
-         * success -- a silent failure is what made this look "working" while
-         * nothing arrived.
+         * SECURITY FIX (C-1): the reset link must NEVER be put in the HTTP
+         * response. An earlier version returned it "directly" when the email
+         * could not be sent -- but the person typing an email address into
+         * this form has NOT proved they own that mailbox, so that handed a
+         * working password-reset link to anyone who knew a parent's address.
          *
-         * The 503 is safe to expose because its cause is the SERVER's mail
-         * configuration, which is identical for every address. It is only
-         * reachable after we already know the account exists, but a broken
-         * mail server produces the same failure for every real account, so it
-         * still tells an attacker nothing about any particular address.
+         * Now every outcome gets the identical generic reply:
+         *   - the account exists / does not exist
+         *   - the email was sent / could not be sent
+         * The only place a failure shows up is the SERVER LOG (below), where
+         * the site owner can see it and fix the email setup.
          *
-         * The token stays in the database: harmless, unreachable without the
-         * emailed link, and it expires on its own.
+         * The email is sent without making the caller wait for it. That keeps
+         * the response time the same for known and unknown addresses (a slow
+         * reply would otherwise reveal that the account exists), and it stops
+         * a slow mail server from freezing the request.
          */
-        try {
-            await sendResetEmail(normalisedEmail, resetUrl);
-        } catch (mailError) {
-            console.log("Could not send reset email:", mailError.message);
-
-            /*
-             * No working mail delivery to this recipient right now (Resend's
-             * sender here isn't verified for a real domain yet, and Render's
-             * free tier blocks outbound SMTP as a fallback). Rather than
-             * fail the whole feature, hand the token back directly: the
-             * token is already scoped to this exact account and expires on
-             * its own, so handing it to whoever is sitting at THIS browser
-             * (the same person who just proved they know this account's
-             * email, by submitting this form) is no more exposed than an
-             * email would have been. It only ever reaches the person who
-             * made this request, same as the email link would have.
-             */
-            return res.status(200).json({
-                success: true,
-                message: "We couldn't email this link right now, so here it is directly.",
-                resetUrl
-            });
-        }
+        sendResetEmail(normalisedEmail, resetUrl).catch((mailError) => {
+            console.error(
+                "[forgot-password] RESET EMAIL FAILED -- the user was told a link was sent, but none was. Fix the email setup. Reason:",
+                mailError.message
+            );
+        });
 
         return res.status(200).json(genericResponse);
 
@@ -1176,7 +1240,7 @@ app.post("/api/auth/forgot-password", authRateLimiter, requireDatabase, async (r
    auth route, so it cannot be used to brute-force a token any faster than
    the real reset endpoint already could be.
    ========================================================================== */
-app.get("/api/auth/reset-password/validity", authRateLimiter, requireDatabase, async (req, res) => {
+app.get("/api/auth/reset-password/validity", resetPasswordRateLimiter, requireDatabase, async (req, res) => {
     try {
         const { token } = req.query;
 
@@ -1210,7 +1274,7 @@ app.get("/api/auth/reset-password/validity", authRateLimiter, requireDatabase, a
    POST /api/auth/reset-password
    Finishes a password reset: checks the token, then sets the new password.
    ========================================================================== */
-app.post("/api/auth/reset-password", authRateLimiter, requireDatabase, async (req, res) => {
+app.post("/api/auth/reset-password", resetPasswordRateLimiter, requireDatabase, async (req, res) => {
     try {
         const { token, password } = req.body;
 
@@ -1292,7 +1356,7 @@ app.post("/api/auth/reset-password", authRateLimiter, requireDatabase, async (re
    POST /api/auth/register
    Creates one new user account.
    ========================================================================== */
-app.post("/api/auth/register", authRateLimiter, requireDatabase, async (req, res) => {
+app.post("/api/auth/register", registerRateLimiter, requireDatabase, async (req, res) => {
     try {
         // 1. Pull the three values out of the JSON the React form sent.
         const { name, email, password } = req.body;
@@ -1441,7 +1505,7 @@ app.post("/api/auth/register", authRateLimiter, requireDatabase, async (req, res
    Reuses createSession() -- the same session mechanism Google sign-in uses --
    so there is only ever one way a user becomes "signed in".
    ========================================================================== */
-app.post("/api/auth/login", authRateLimiter, requireDatabase, async (req, res) => {
+app.post("/api/auth/login", loginRateLimiter, requireDatabase, async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -1562,7 +1626,7 @@ app.post("/api/auth/login", authRateLimiter, requireDatabase, async (req, res) =
    cryptographic signature, the audience (that it was issued for OUR app), the
    issuer, and the expiry.
    ========================================================================== */
-app.post("/api/auth/google", authRateLimiter, requireDatabase, async (req, res) => {
+app.post("/api/auth/google", googleRateLimiter, requireDatabase, async (req, res) => {
     try {
         /*
          * Validate the input FIRST. A malformed request is a client error
@@ -1816,7 +1880,7 @@ app.get("/api/auth/me", async (req, res) => {
          * existing not-signed-in handling (drop the cookie's claim, show
          * Sign in) is all that is needed on that side.
          */
-        if (tokenPredatesPasswordChange(payload, user)) {
+        if (tokenPredatesPasswordChange(payload, user) || sessionWasRevoked(payload, user)) {
             return res.status(401).json({ success: false, message: "Not signed in." });
         }
 
@@ -1934,7 +1998,7 @@ async function requireAuth(req, res, next) {
          * stale pre-reset session, not just the one screen that happens to
          * render the board/sign-in choice.
          */
-        if (tokenPredatesPasswordChange(payload, user)) {
+        if (tokenPredatesPasswordChange(payload, user) || sessionWasRevoked(payload, user)) {
             return res.status(401).json({ success: false, message: "Please sign in first." });
         }
 
@@ -1995,7 +2059,7 @@ function checkSettingsPasswordRule(password) {
  *
  * These are reachable by anyone already holding a signed-in session (the
  * child's own device), so the attacker model is different from the main
- * authRateLimiter above: not "a stranger guessing a stolen account's
+ * the account rate limiters above: not "a stranger guessing a stolen account's
  * password", but "the child in front of the screen trying PINs". Fewer
  * attempts, same 15-minute window.
  */
@@ -2011,24 +2075,104 @@ const settingsPasswordRateLimiter = rateLimit({
 });
 
 const RECOVERY_CHALLENGE_MINUTES = 10;
-// Characters that cannot be confused for one another when read off a screen.
-const CAPTCHA_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+/* A wrong emailed code can be tried this many times before it is thrown away. */
+const RECOVERY_CODE_MAX_TRIES = 5;
 
-function generateCaptchaText() {
-    let text = "";
-    for (let i = 0; i < 6; i++) {
-        text += CAPTCHA_ALPHABET[crypto.randomInt(CAPTCHA_ALPHABET.length)];
-    }
-    return text;
+/*
+ * SECURITY FIX (H-1): how "Forgot Settings Password?" works now.
+ *
+ * It used to show a 6-character "CAPTCHA" ON THE SAME SCREEN and ask the user
+ * to retype it -- which proves nothing, because whoever is holding the device
+ * (the child) can read it too. So the code was never a secret.
+ *
+ * Now the person must prove they are the ACCOUNT OWNER:
+ *   - accounts with a password:  type the account (login) password; the server
+ *     checks it with bcrypt. The child does not know it.
+ *   - Google-only accounts (no password exists to type): a 6-digit code is
+ *     EMAILED to the account's own address. The code is never sent to the
+ *     browser. It is stored only as a keyed hash, expires after
+ *     RECOVERY_CHALLENGE_MINUTES, and is thrown away after
+ *     RECOVERY_CODE_MAX_TRIES wrong guesses.
+ */
+function generateRecoveryCode() {
+    return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
 }
 
 /*
- * Same idea as hashResetToken above: the raw CAPTCHA text is only ever sent
- * to the client and compared against; the database holds just this hash, so
- * a database dump cannot be used to answer the challenge.
+ * Keyed hash (HMAC) so a copy of the database alone cannot be used to work out
+ * the code: an attacker would also need JWT_SECRET.
  */
-function hashCaptchaText(text) {
-    return crypto.createHash("sha256").update(text.toUpperCase().trim()).digest("hex");
+function hashRecoveryCode(userId, code) {
+    return crypto
+        .createHmac("sha256", process.env.JWT_SECRET)
+        .update(`${userId}:${String(code).trim()}`)
+        .digest("hex");
+}
+
+function safeEqualHex(a, b) {
+    const left = Buffer.from(String(a), "hex");
+    const right = Buffer.from(String(b), "hex");
+    return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+/* "asha@gmail.com" -> "a***@gmail.com": enough to recognise, not to harvest. */
+function maskEmail(email) {
+    const [local, domain] = String(email).split("@");
+    return `${local.slice(0, 1)}***@${domain}`;
+}
+
+/*
+ * Emails the recovery code. Same rules as the password-reset email: Resend
+ * first, then SMTP; with neither configured it is printed to the terminal in
+ * DEVELOPMENT only and refused in production (a code in a hosting log is a
+ * secret in a log).
+ */
+async function sendPinRecoveryEmail(toEmail, code) {
+    const subject = "Your Buddy Talk Settings PIN recovery code";
+    const text =
+        `Your Buddy Talk recovery code is ${code}\n\n` +
+        `It works for ${RECOVERY_CHALLENGE_MINUTES} minutes. If you did not ask for it, someone using your ` +
+        `device pressed "Forgot Settings Password". Nothing changes unless the code is entered, so you can ignore this email.`;
+
+    if (process.env.RESEND_API_KEY) {
+        const response = await fetch("https://api.resend.com/emails", {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                from: process.env.RESEND_FROM_EMAIL || "Buddy Talk <onboarding@resend.dev>",
+                to: toEmail,
+                subject,
+                text
+            })
+        });
+        if (!response.ok) {
+            throw new Error(`Resend API responded ${response.status}`);
+        }
+        return;
+    }
+
+    const transport = createMailTransport();
+
+    if (!transport) {
+        if (IS_PRODUCTION) {
+            throw new Error("No email provider is configured (set RESEND_API_KEY or SMTP_HOST/SMTP_USER/SMTP_PASS).");
+        }
+        console.log("\n=== SETTINGS PIN RECOVERY CODE (no SMTP configured -- development only) ===");
+        console.log(`  to:   ${toEmail}`);
+        console.log(`  code: ${code}`);
+        console.log("===========================================================================\n");
+        return;
+    }
+
+    await transport.sendMail({
+        from: process.env.MAIL_FROM || `"Buddy Talk" <${process.env.SMTP_USER}>`,
+        to: toEmail,
+        subject,
+        text
+    });
 }
 
 /*
@@ -2188,35 +2332,58 @@ app.post("/api/settings-password/change", settingsPasswordRateLimiter, requireAu
 
 /*
  * POST /api/settings-password/recovery/challenge
- * Step 1 of "Forgot Settings Password?": issues a CAPTCHA the caller must
- * read back correctly before being allowed to set a new Settings Password.
+ * Step 1 of "Forgot Settings Password?": tells the screen HOW this account
+ * proves it is the owner, and (Google-only accounts) emails the code.
  *
- * requireAuth gates this -- the account itself must already be signed in
- * (this is a recovery for the SECOND password, not the account login), which
- * is also why this never asks "which account" or reveals anything about one.
+ * NEVER returns a code. The only things sent back are the method and, for the
+ * email method, a masked address like "a***@gmail.com".
  *
- * Only the HASH is stored; the raw text goes only in the response, mirroring
- * the reset-token pattern used for account password resets. Single-use and
- * short-lived: generating a new challenge immediately invalidates any
- * earlier one for this account, and it expires on its own after
- * RECOVERY_CHALLENGE_MINUTES even if never used.
+ * requireAuth gates this -- the account itself must already be signed in.
  */
 app.post("/api/settings-password/recovery/challenge", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
     try {
-        const text = generateCaptchaText();
+        const user = req.user;
+
+        /* Any earlier half-finished recovery is cancelled by starting a new one. */
+        const clearOld = {
+            settingsRecoveryGrantedAt: "",
+            settingsRecoveryChallengeHash: "",
+            settingsRecoveryExpiresAt: "",
+            settingsRecoveryAttempts: ""
+        };
+
+        if (user.password) {
+            await users.updateOne({ _id: user._id }, { $unset: clearOld });
+            return res.status(200).json({ success: true, method: "account-password" });
+        }
+
+        const code = generateRecoveryCode();
 
         await users.updateOne(
-            { _id: req.user._id },
+            { _id: user._id },
             {
                 $set: {
-                    settingsRecoveryChallengeHash: hashCaptchaText(text),
-                    settingsRecoveryExpiresAt: new Date(Date.now() + RECOVERY_CHALLENGE_MINUTES * 60 * 1000)
+                    settingsRecoveryChallengeHash: hashRecoveryCode(user._id, code),
+                    settingsRecoveryExpiresAt: new Date(Date.now() + RECOVERY_CHALLENGE_MINUTES * 60 * 1000),
+                    settingsRecoveryAttempts: 0
                 },
                 $unset: { settingsRecoveryGrantedAt: "" }
             }
         );
 
-        return res.status(200).json({ success: true, captcha: text });
+        /* Not awaited, and a failure is only LOGGED (never shown to the caller). */
+        sendPinRecoveryEmail(user.email, code).catch((mailError) => {
+            console.error(
+                "[pin-recovery] RECOVERY EMAIL FAILED -- a Google-only user asked for a code but none was sent. Fix the email setup. Reason:",
+                mailError.message
+            );
+        });
+
+        return res.status(200).json({
+            success: true,
+            method: "email-code",
+            emailHint: maskEmail(user.email)
+        });
 
     } catch (error) {
         console.log("Settings Password recovery challenge failed:", error);
@@ -2226,48 +2393,64 @@ app.post("/api/settings-password/recovery/challenge", settingsPasswordRateLimite
 
 /*
  * POST /api/settings-password/recovery/verify
- * Step 2: checks the CAPTCHA answer. On success, marks this account as
- * "granted" recovery (a timestamp, not a password) so the follow-up
- * /recovery/reset call can create a new Settings Password without the old
- * one -- but ONLY within a short window and only once, since verifying also
- * immediately clears the challenge hash, making it single-use.
+ * Step 2: checks the proof of ownership.
+ *   body { accountPassword }  for accounts that have a password (bcrypt check)
+ *   body { code }             for Google-only accounts (the emailed code)
+ *
+ * On success, marks this account as "granted" recovery (a timestamp, not a
+ * password) so the follow-up /recovery/reset call can create a new Settings
+ * Password without the old one -- but ONLY within a short window and only
+ * once. The existing rate limiter (15 tries / 15 min) still applies.
  */
 app.post("/api/settings-password/recovery/verify", settingsPasswordRateLimiter, requireAuth, async (req, res) => {
     try {
-        const { captcha } = req.body;
-
-        if (typeof captcha !== "string" || !captcha.trim()) {
-            return res.status(400).json({ success: false, message: "Please enter the characters shown." });
-        }
-
+        const { accountPassword, code } = req.body || {};
         const user = await users.findOne({ _id: req.user._id });
 
-        if (
-            !user.settingsRecoveryChallengeHash ||
-            !user.settingsRecoveryExpiresAt ||
-            user.settingsRecoveryExpiresAt.getTime() < Date.now()
-        ) {
-            return res.status(400).json({ success: false, message: "This code has expired. Please request a new one." });
+        if (user.password) {
+            if (typeof accountPassword !== "string" || !accountPassword) {
+                return res.status(400).json({ success: false, message: "Please enter your account password." });
+            }
+
+            const matches = await bcrypt.compare(accountPassword, user.password);
+
+            if (!matches) {
+                return res.status(401).json({ success: false, message: "That account password is not correct." });
+            }
+        } else {
+            if (typeof code !== "string" || !/^\d{6}$/.test(code.trim())) {
+                return res.status(400).json({ success: false, message: "Please enter the 6-digit code from your email." });
+            }
+
+            if (
+                !user.settingsRecoveryChallengeHash ||
+                !user.settingsRecoveryExpiresAt ||
+                user.settingsRecoveryExpiresAt.getTime() < Date.now()
+            ) {
+                return res.status(400).json({ success: false, message: "This code has expired. Please ask for a new one." });
+            }
+
+            if ((user.settingsRecoveryAttempts || 0) >= RECOVERY_CODE_MAX_TRIES) {
+                await users.updateOne(
+                    { _id: user._id },
+                    { $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "", settingsRecoveryAttempts: "" } }
+                );
+                return res.status(400).json({ success: false, message: "Too many wrong tries. Please ask for a new code." });
+            }
+
+            if (!safeEqualHex(user.settingsRecoveryChallengeHash, hashRecoveryCode(user._id, code))) {
+                await users.updateOne({ _id: user._id }, { $inc: { settingsRecoveryAttempts: 1 } });
+                return res.status(400).json({ success: false, message: "That code was not correct." });
+            }
         }
 
-        const matches = user.settingsRecoveryChallengeHash === hashCaptchaText(captcha);
-
-        /*
-         * Wrong or right, the challenge is consumed: a wrong guess does not
-         * get a second try against the SAME code (it must request a fresh
-         * one), which is what makes this single-use rather than merely
-         * expiring.
-         */
         await users.updateOne(
-            { _id: req.user._id },
-            matches
-                ? { $set: { settingsRecoveryGrantedAt: new Date() }, $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "" } }
-                : { $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "" } }
+            { _id: user._id },
+            {
+                $set: { settingsRecoveryGrantedAt: new Date() },
+                $unset: { settingsRecoveryChallengeHash: "", settingsRecoveryExpiresAt: "", settingsRecoveryAttempts: "" }
+            }
         );
-
-        if (!matches) {
-            return res.status(400).json({ success: false, message: "That code was not correct. Please try a new one." });
-        }
 
         return res.status(200).json({ success: true });
 
@@ -4429,9 +4612,53 @@ app.delete("/api/cards/:id", requireAuth, requireChildProfile, async (req, res) 
    POST /api/auth/logout
    Clears the session cookie.
    ========================================================================== */
-app.post("/api/auth/logout", (req, res) => {
+app.post("/api/auth/logout", async (req, res) => {
     // Same attributes it was set with -- a mismatch leaves the cookie in place.
     res.clearCookie("session", SESSION_COOKIE_OPTIONS);
+
+    /*
+     * SECURITY FIX (M-4): also cancel the token on the server, so a copy of
+     * the cookie stops working too. Only a valid, still-current token can
+     * trigger this (so a stranger cannot sign other people out by posting
+     * junk), and `tv` in the filter means two logouts at once raise the
+     * version only once.
+     */
+    const token = req.cookies?.session;
+
+    if (!token) {
+        return res.status(200).json({ success: true, message: "Signed out." });
+    }
+
+    let payload;
+    try {
+        payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+        return res.status(200).json({ success: true, message: "Signed out." });
+    }
+
+    try {
+        if (!dbState.ready) throw new Error("database not ready");
+        const tv = payload.tv || 0;
+        await users.updateOne(
+            {
+                _id: new ObjectId(payload.userId),
+                // version 0 also means "no tokenVersion stored yet"
+                tokenVersion: tv === 0 ? { $in: [0, null] } : tv
+            },
+            { $inc: { tokenVersion: 1 } }
+        );
+    } catch (error) {
+        /*
+         * The cookie is already cleared in this browser, but the server could
+         * not cancel the token, so do NOT claim a clean sign-out.
+         */
+        console.error("[logout] could not cancel the session on the server:", error.message);
+        return res.status(503).json({
+            success: false,
+            message: "You were signed out on this device, but the server could not fully end the session. Please try again."
+        });
+    }
+
     return res.status(200).json({ success: true, message: "Signed out." });
 });
 

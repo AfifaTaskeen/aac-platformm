@@ -29,6 +29,7 @@ require("dotenv").config();
 const { MongoClient } = require("mongodb");
 const { ObjectId } = require("mongodb");
 const { scanImageLibrary, seedBoardForChild, CARD_IMAGE_ROOT } = require("./boardData");
+const { requireDbName, confirmDatabaseName } = require("./dbName");
 
 const args = process.argv.slice(2);
 const hasFlag = (name) => args.includes(name);
@@ -62,11 +63,15 @@ async function main() {
 
     const dryRun = hasFlag("--dry-run");
 
+    // Refuses to run at all unless MONGODB_DB is set (see dbName.js).
+    const DB_NAME = requireDbName("reseedBoard.js");
+
     const client = new MongoClient(process.env.MONGODB_URI, { family: 4 });
     await client.connect();
 
-    // The SAME database the server uses. This script never creates another.
-    const db = client.db("BuddyTalk");
+    // The database named by MONGODB_DB -- the same variable the server uses.
+    const db = client.db(DB_NAME);
+    console.log(`Database: ${DB_NAME}`);
     const childProfiles = db.collection("childProfiles");
     const folders = db.collection("folders");
     const cards = db.collection("cards");
@@ -138,6 +143,23 @@ async function main() {
         if (unclassified.length) {
             console.log(`\n  UNCLASSIFIED images: ${unclassified.length}`);
             unclassified.forEach((u) => console.log(`    ${u.path}  -- ${u.reason}`));
+        }
+
+        /*
+         * SAFETY (M-1): before anything is deleted, the person must type the
+         * database name. A dry run changes nothing, so it needs no confirmation.
+         */
+        if (!dryRun) {
+            const confirmed = await confirmDatabaseName(
+                DB_NAME,
+                `This will DELETE and rebuild ${targets.length} board(s) in database "${DB_NAME}". ` +
+                    "Every edit those families made (renamed cards, uploaded photos, own folders) will be lost."
+            );
+
+            if (!confirmed) {
+                console.log("\nCancelled. Nothing was deleted.\n");
+                return;
+            }
         }
 
         console.log(`\n${dryRun ? "DRY RUN -- nothing will be changed" : "REBUILDING"}\n`);

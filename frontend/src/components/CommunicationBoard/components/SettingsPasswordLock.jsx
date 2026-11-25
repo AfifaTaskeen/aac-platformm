@@ -3,7 +3,7 @@ import {
   verifySettingsPassword,
   setSettingsPassword,
   requestSettingsPasswordRecoveryChallenge,
-  verifySettingsPasswordRecoveryCaptcha,
+  verifySettingsPasswordRecovery,
   resetSettingsPasswordViaRecovery,
 } from '../boardApi'
 
@@ -41,7 +41,7 @@ const SETTINGS_PASSWORD_HINT = `Settings Password must be exactly ${SETTINGS_PAS
  *   'checking' - briefly, while GET /api/settings-password/status loads
  *   'create'   - no Settings Password exists yet; first-time creation only
  *   'locked'   - one exists; show the password field (default) or, via
- *                "Forgot Settings Password?", the CAPTCHA recovery flow
+ *                "Forgot Settings Password?", the ownership-proof recovery flow
  *
  * FIRST-TIME SETUP AUTO-UNLOCKS; RECOVERY DOES NOT. Saving a brand-new PIN
  * in 'create' mode calls `onUnlocked` immediately -- the caregiver only
@@ -50,7 +50,7 @@ const SETTINGS_PASSWORD_HINT = `Settings Password must be exactly ${SETTINGS_PAS
  * "Forgot Settings Password?" ('forgot-create') is unchanged: it still
  * drops back to the normal enter-PIN screen, since that path exists
  * specifically to confirm the caregiver, who may not be the person who just
- * passed the CAPTCHA, actually knows the new PIN.
+ * proved ownership, actually knows the new PIN.
  *
  * Props:
  *   hasSettingsPassword - whether one already exists (status already
@@ -64,16 +64,20 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
   /*
    * 'password' - normal unlock entry (existing password)
    * 'create'   - first-time Settings Password creation (no password exists)
-   * 'forgot-captcha' - recovery step 1/2: enter the shown CAPTCHA
-   * 'forgot-create'  - recovery step 3: CAPTCHA passed, create a new password
+   * 'forgot-verify'  - recovery step 1/2: prove you are the account owner
+   *                     (account password, or the 6-digit code emailed to
+   *                     Google-only accounts -- NEVER a code shown on screen)
+   * 'forgot-create'  - recovery step 3: ownership proved, create a new password
    */
   const [mode, setMode] = useState(hasSettingsPassword ? 'password' : 'create')
 
   const [password, setPasswordValue] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [captchaText, setCaptchaText] = useState('')
-  const [captchaInput, setCaptchaInput] = useState('')
+  /* 'account-password' or 'email-code' -- decided by the server (step 1). */
+  const [recoveryMethod, setRecoveryMethod] = useState('account-password')
+  const [emailHint, setEmailHint] = useState('')
+  const [recoveryInput, setRecoveryInput] = useState('')
 
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -176,9 +180,10 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
     setConfirmationNote('')
     try {
       const data = await requestSettingsPasswordRecoveryChallenge()
-      setCaptchaText(data.captcha)
-      setCaptchaInput('')
-      setMode('forgot-captcha')
+      setRecoveryMethod(data.method === 'email-code' ? 'email-code' : 'account-password')
+      setEmailHint(data.emailHint || '')
+      setRecoveryInput('')
+      setMode('forgot-verify')
     } catch (err) {
       setError(err.message || 'Could not start recovery. Please try again.')
     } finally {
@@ -186,21 +191,26 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
     }
   }
 
-  async function handleCaptchaSubmit(event) {
+  async function handleRecoverySubmit(event) {
     event.preventDefault()
     if (busy) return
-    if (!captchaInput.trim()) {
-      setError('Please enter the characters shown.')
+    const usingEmailCode = recoveryMethod === 'email-code'
+    if (!recoveryInput.trim()) {
+      setError(usingEmailCode ? 'Please enter the 6-digit code from your email.' : 'Please enter your account password.')
       return
     }
 
     setBusy(true)
     setError('')
     try {
-      await verifySettingsPasswordRecoveryCaptcha(captchaInput)
+      await verifySettingsPasswordRecovery(
+        usingEmailCode ? { code: recoveryInput.trim() } : { accountPassword: recoveryInput },
+      )
+      setRecoveryInput('')
       setMode('forgot-create')
     } catch (err) {
-      setError(err.message || 'That code was not correct. Please try a new one.')
+      setError(err.message || 'That did not match. Please try again.')
+      setRecoveryInput('')
     } finally {
       setBusy(false)
     }
@@ -236,7 +246,7 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
           <h2 className="cpanel__title" id="settings-lock-title">
             {mode === 'create'
               ? 'Set your Settings PIN'
-              : mode === 'forgot-captcha'
+              : mode === 'forgot-verify'
                 ? "Verify it's you"
                 : mode === 'forgot-create'
                   ? 'Create New Settings Password'
@@ -358,25 +368,33 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
             </form>
           )}
 
-          {mode === 'forgot-captcha' && (
-            <form className="cslock__form" onSubmit={handleCaptchaSubmit}>
-              <p className="cslock__intro">Enter the characters shown below:</p>
-
-              <p className="cslock__captcha" aria-label={`Verification code: ${captchaText}`}>
-                {captchaText}
-              </p>
+          {mode === 'forgot-verify' && (
+            <form className="cslock__form" onSubmit={handleRecoverySubmit}>
+              {recoveryMethod === 'email-code' ? (
+                <p className="cslock__intro">
+                  We emailed a 6-digit code to {emailHint || 'your account email'}. Enter it below.
+                </p>
+              ) : (
+                <p className="cslock__intro">
+                  To reset the Settings PIN, enter your Buddy Talk account password (the one you sign in with).
+                </p>
+              )}
 
               <label className="cedit__field">
-                <span className="cedit__label">Verification code</span>
+                <span className="cedit__label">
+                  {recoveryMethod === 'email-code' ? 'Code from email' : 'Account password'}
+                </span>
                 <input
                   ref={firstFieldRef}
                   className="cedit__input"
-                  type="text"
-                  autoComplete="off"
-                  autoCapitalize="characters"
-                  value={captchaInput}
+                  type={recoveryMethod === 'email-code' ? 'text' : 'password'}
+                  inputMode={recoveryMethod === 'email-code' ? 'numeric' : undefined}
+                  autoComplete={recoveryMethod === 'email-code' ? 'one-time-code' : 'current-password'}
+                  maxLength={recoveryMethod === 'email-code' ? 6 : undefined}
+                  aria-label={recoveryMethod === 'email-code' ? 'Code from email' : 'Account password'}
+                  value={recoveryInput}
                   onChange={(event) => {
-                    setCaptchaInput(event.target.value)
+                    setRecoveryInput(event.target.value)
                     if (error) setError('')
                   }}
                 />
@@ -391,6 +409,7 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
                   onClick={() => {
                     setMode('password')
                     setError('')
+                    setRecoveryInput('')
                   }}
                   disabled={busy}
                 >
@@ -401,14 +420,16 @@ function SettingsPasswordLock({ hasSettingsPassword, onUnlocked, onClose }) {
                 </button>
               </div>
 
-              <button
-                type="button"
-                className="cslock__link"
-                onClick={startForgotFlow}
-                disabled={busy}
-              >
-                Get a new code
-              </button>
+              {recoveryMethod === 'email-code' && (
+                <button
+                  type="button"
+                  className="cslock__link"
+                  onClick={startForgotFlow}
+                  disabled={busy}
+                >
+                  Send a new code
+                </button>
+              )}
             </form>
           )}
 
